@@ -8,7 +8,6 @@ from sklearn.cluster import DBSCAN
 
 class MovingObjectDetector:
     def __init__(self, eps=1.5, min_samples=4):
-        
         # maximum distance between two samples for them to be considered as in the same neighborhood
         # default is 1.5 grid units
         self.eps = eps
