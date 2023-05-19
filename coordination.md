@@ -5,6 +5,8 @@ rosrun stage_ros stageros PA1.world
 
 Modules:
 * Finder
+  * Publish below communication
+  * May move robot before isFound is true
 * Learner
   * movement (Twist)
 
