@@ -25,11 +25,12 @@ DEFAULT_OCCUPANCY_GRID_TOPIC = 'map'
 DEFAULT_SCAN_FRAME_ID = 'base_laser_link' # base_scan if using turtlebot
 
 # Parameters
-DEFAULT_RESOLUTION = 0.1 # m
-DEFAULT_GRID_WIDTH = 800 # grid cells
-DEFAULT_GRID_HEIGHT = 400 # grid cells
-DEFAULT_GRID_TRANSLATION = (-10, -10) # m
+DEFAULT_RESOLUTION = 0.3 # m
+DEFAULT_GRID_WIDTH = 40 # grid cells
+DEFAULT_GRID_HEIGHT = 40 # grid cells
+DEFAULT_GRID_TRANSLATION = (-5, -5) # m
 DEFAULT_GRID_ROTATION = 0 # yaw
+LASER_PRECISION = 0.05 # m 
 
 # Frequency at which the loop operates
 PUBLISH_FREQUENCY = 5 #Hz.
@@ -48,7 +49,8 @@ class Finder():
         grid_width=DEFAULT_GRID_WIDTH,
         grid_height=DEFAULT_GRID_HEIGHT,
         grid_translation=DEFAULT_GRID_TRANSLATION,
-        grid_rotation=DEFAULT_GRID_ROTATION
+        grid_rotation=DEFAULT_GRID_ROTATION,
+        laser_precision=LASER_PRECISION
         ):
         """Constructor."""
 
@@ -63,8 +65,11 @@ class Finder():
         self.grid_height = grid_height
         self.grid_width = grid_width
         self.resolution = resolution
+        self.laser_precision = laser_precision
         # state
-        self.grid = np.full((grid_height, grid_width), -1)
+        # (free, occupied, unknown)
+        self.grid = np.tile(np.array([0, 0, 1], dtype=np.float64),(grid_height, grid_width, 1),)
+        np.set_printoptions(threshold=sys.maxsize)
         self.last_update = rospy.get_rostime()
 
         # for convenience, storing some grid variables that can be caluclated dynamically
@@ -129,7 +134,22 @@ class Finder():
 
     def _get_coordinates_from_angle_and_distance(self, angle, distance):
         return (np.cos(angle) * distance, np.sin(angle) * distance)
-    def _update_grid_for_point(self, sorted_observations, grid_to_laser, grid_point):
+
+    def _get_perpendicular_ray_coeff(self, horizontal_component, ray_distance, angle_increment):
+        std_dev = abs(np.sin(angle_increment / 2)) * ray_distance
+        coeff = np.exp(- (horizontal_component ** 2) / (2 * (std_dev ** 2)))
+        return coeff
+
+    def _get_parallel_ray_coeffs(self, laser_distance, parallel_component):
+        x = parallel_component - laser_distance
+        free = 1 / (1 + np.exp(30 * (x + (self.laser_precision * 2))))
+        unknown = 1 / (1 + np.exp(-30 * (x - (self.laser_precision * 2))))
+        occupied = 1 - free - unknown
+        return np.array([free, occupied])
+
+
+
+    def _update_grid_for_point(self, sorted_observations, grid_to_laser, grid_point, angle_increment):
         laser_point = self._transform_2d_point(grid_to_laser, grid_point)
         x, y = laser_point
         angle = (np.arctan2(y, x) + TWO_PI) % TWO_PI
@@ -140,25 +160,35 @@ class Finder():
         if idx > 0 and (idx == len(angles) or math.fabs(angle - angles[idx-1]) < math.fabs(angle - angles[idx])):
             idx = idx - 1
         closest_ray = sorted_observations[idx]
-        print(closest_ray)
-        print(distance)
-        if distance > closest_ray[1]:
-            return
-        self.grid[int(grid_point[1]), int(grid_point[0])] = 0
-        # elif abs(distance - closest_ray[1]) < 0.1 and closest_ray[2]:
-        #     self.grid[int(grid_point[1]), int(grid_point[0])] = 100
-        # else:
-        #     self.grid[int(grid_point[1]), int(grid_point[0])] = 0
+        angle_to_ray = angle - closest_ray[0]
+        perp_component_to_ray = abs(np.sin(angle_to_ray)) * distance
+        parallel_component_to_ray = abs(np.cos(angle_to_ray)) * distance
+        # heuristic to avoid doing unnecessary calculations 
+        if parallel_component_to_ray > closest_ray[1] + 5 * self.laser_precision:
+            parallel_coeffs = np.array([0, 0])
+        elif parallel_component_to_ray < closest_ray[1] - 5 * self.laser_precision:
+            parallel_coeffs = np.array([1, 0])
+        else:
+            parallel_coeffs = self._get_parallel_ray_coeffs(closest_ray[1], parallel_component_to_ray)
+        perp_coeff = self._get_perpendicular_ray_coeff(perp_component_to_ray, closest_ray[1], angle_increment)
+        free, occupied = parallel_coeffs * perp_coeff
+        self.grid[int(grid_point[1]), int(grid_point[0])] = np.array([free, occupied, 1 - free - occupied])
 
 
-    def _update_grid(self, laser_to_odom, odom_to_laser, observations, max_range):
+    def _update_grid(self, laser_to_odom, odom_to_laser, observations, max_range, angle_increment):
         """Observations are ((laser x, laser y), obstacle)"""
         odom_start = self._transform_2d_point(laser_to_odom, (0, 0))
         grid_start = self._transform_2d_point(self.odom_to_grid, odom_start)
-        grid_cells_range = max_range / self.resolution
+        max_observed_range = 0
+        for observation in observations:
+            if observation[1] == max_range:
+                continue
+            max_observed_range = max(max_observed_range, observation[1])
+        max_observed_range = min(max_observed_range / self.resolution + 1, max_range / self.resolution)
         grid_to_laser = np.matmul(odom_to_laser ,self.grid_to_odom)
         # (angle, distance per laser, was_obstacle_found)
         sorted_observations = observations[observations[:, 0].argsort()]
+        # add "first" angle to end and "last" angle to front to reflect modular equivalence of angles
         last_obs = np.copy(sorted_observations[-1])
         last_obs[0] -= TWO_PI
         first_obs = np.copy(sorted_observations[0])
@@ -166,13 +196,13 @@ class Finder():
         sorted_observations = np.insert(sorted_observations, 0, last_obs, axis=0)
         sorted_observations = np.append(sorted_observations, np.array([first_obs]), axis=0)
         
-        box_x_start = int(round(max(0, grid_start[0] - grid_cells_range)))
-        box_x_end = int(round(min(self.grid.shape[0] - 1, grid_start[0] + grid_cells_range)))
-        box_y_start = int(round(max(0, grid_start[1] - grid_cells_range)))
-        box_y_end = int(round(min(self.grid.shape[1] - 1, grid_start[1] + grid_cells_range)))
+        box_x_start = int(round(max(0, grid_start[0] - max_observed_range)))
+        box_x_end = int(round(min(self.grid.shape[1] - 1, grid_start[0] + max_observed_range)))
+        box_y_start = int(round(max(0, grid_start[1] - max_observed_range)))
+        box_y_end = int(round(min(self.grid.shape[0] - 1, grid_start[1] + max_observed_range)))
         for y in range(box_y_start, box_y_end + 1):
             for x in range(box_x_start, box_x_end + 1):
-                self._update_grid_for_point(sorted_observations, grid_to_laser, (x, y))
+                self._update_grid_for_point(sorted_observations, grid_to_laser, (x, y), angle_increment)
 
         # process all observations to convert angles into 0-360 (eventually: calculate std dev of models)
         # iterate through all grid cells in a bounding box
@@ -201,19 +231,18 @@ class Finder():
                 is_end_occupied = False
 
             observations[i] = np.array([(angle + TWO_PI) % TWO_PI, dist, is_end_occupied])
-        self._update_grid(laser_to_odom, odom_to_laser, observations, msg.range_max)
+        self._update_grid(laser_to_odom, odom_to_laser, observations, msg.range_max, msg.angle_increment)
         self.last_update = time
 
     def publish(self):
         """Start publishing the occupancy grid"""
         rate = rospy.Rate(self.publish_frequency)
-        self.grid = np.full((self.grid_height, self.grid_width), -1)
         while not rospy.is_shutdown():
             grid_msg = OccupancyGrid()
             grid_msg.header.stamp = rospy.get_rostime()
             grid_msg.header.frame_id = 'odom'
             grid_msg.info = self.map_metadata
-            grid_msg.data = self.grid.flatten()
+            grid_msg.data = np.rint(self.grid[:,:, 2] * 100).astype(int).flatten()
             self._grid_pub.publish(grid_msg)
             rate.sleep()
 
@@ -228,7 +257,6 @@ def main():
 
     # Initialization of the class for the random walk.
     grid_mapper = Finder()
-    np.set_printoptions(threshold=sys.maxsize)
 
     # Robot moves.
     try:
