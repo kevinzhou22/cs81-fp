@@ -10,7 +10,7 @@ import math
 
 # import of relevant libraries.
 import rospy # module for ROS APIs pylint: disable=import-error
-from geometry_msgs.msg import Pose # message type for cmd_vel pylint: disable=import-error
+from geometry_msgs.msg import Twist, Pose # message type for cmd_vel pylint: disable=import-error
 from sensor_msgs.msg import LaserScan # message type for scan pylint: disable=import-error
 from nav_msgs.msg import OccupancyGrid, MapMetaData # pylint: disable=import-error
 
@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 # Topic names
 DEFAULT_SCAN_TOPIC = 'base_scan' # scan if using turtlebot
 DEFAULT_OCCUPANCY_GRID_TOPIC = 'map'
+DEFAULT_CMD_VEL_TOPIC = 'cmd_vel'
 
 # Frame names
 DEFAULT_SCAN_FRAME_ID = 'base_laser_link' # base_scan if using turtlebot
@@ -31,8 +32,8 @@ DEFAULT_GRID_WIDTH = 250 # grid cells
 DEFAULT_GRID_HEIGHT = 200 # grid cells
 DEFAULT_GRID_TRANSLATION = (-5, -5) # m
 DEFAULT_GRID_ROTATION = 0 # yaw
-LASER_MIN_ERROR = 0.05 # m 
-LASER_PERCENT_INCREASE_ACCURACY = 0.005 # percent
+LASER_MIN_ERROR = 0.04 # m 
+LASER_PERCENT_INCREASE_ACCURACY = 0.002 # percent
 
 # Frequency at which the loop operates
 PUBLISH_FREQUENCY = 5 #Hz.
@@ -47,6 +48,7 @@ class Finder():
         update_frequency=UPDATE_FREQUENCY,
         scan_topic=DEFAULT_SCAN_TOPIC,
         grid_topic=DEFAULT_OCCUPANCY_GRID_TOPIC,
+        cmd_vel_topic=DEFAULT_CMD_VEL_TOPIC,
         resolution=DEFAULT_RESOLUTION,
         grid_width=DEFAULT_GRID_WIDTH,
         grid_height=DEFAULT_GRID_HEIGHT,
@@ -58,6 +60,7 @@ class Finder():
         """Constructor."""
 
         # Setting up publishers/subscribers.
+        self._cmd_pub = rospy.Publisher(cmd_vel_topic, Twist, queue_size=1)
         self._grid_pub = rospy.Publisher(grid_topic, OccupancyGrid, queue_size=1)
         self._laser_sub = rospy.Subscriber(scan_topic, LaserScan, self._laser_callback, queue_size=1)
         self.transform_listener = tf.TransformListener()
@@ -155,18 +158,31 @@ class Finder():
         free = 1 / (1 + np.exp(30 * (x +  std_dev)))
         unknown = 1 / (1 + np.exp(-30 * (x - std_dev)))
         occupied = 1 - free - unknown
-        if (len(self.points) == 5000):
-            converted = np.array(self.points)
-            plt.scatter(converted[:, 0], converted[:, 1])
-            plt.scatter(converted[:, 0], converted[:, 2])
-            plt.scatter(converted[:, 0], converted[:, 3])
-            plt.savefig("foo.png")
-            self.points.append(0)
-        elif len(self.points) < 5000:
-            self.points.append((x / std_dev, free, unknown, occupied))
+        # if (len(self.points) == 5000):
+        #     converted = np.array(self.points)
+        #     plt.scatter(converted[:, 0], converted[:, 1])
+        #     plt.scatter(converted[:, 0], converted[:, 2])
+        #     plt.scatter(converted[:, 0], converted[:, 3])
+        #     plt.savefig("foo.png")
+        #     self.points.append(0)
+        # elif len(self.points) < 5000:
+        #     self.points.append((x / std_dev, free, unknown, occupied))
         return np.array([free, occupied])
 
-        
+    def _fuse_measurement_for_grid_point(self, grid_point, new):
+        # Dempster's rule of combination as described in 
+        # OCCUPANCY MODELLING FOR MOVING OBJECT DETECTION FROM LIDAR POINT CLOUDS: A COMPARATIVE STUDY
+        # by W. Xiao et al
+        old = self.grid[grid_point[1]][grid_point[0]]
+        conflict = old[1] * new[0] + old[0] * new[1]
+        conflict_coefficient = 1 / (1 - conflict)
+        combined_measurement = conflict_coefficient * np.array([
+            old[0] * new[0] + old[0] * new[2] + old[2] * new[0],
+            old[1] * new[1] + old[1] * new[2] + old[2] * new[1],
+            old[2] * new[2]
+        ], dtype=np.float64)
+        combined_measurement = combined_measurement / np.linalg.norm(combined_measurement)
+        self.grid[grid_point[1]][grid_point[0]] = combined_measurement
     def _update_grid_for_point(self, sorted_observations, grid_to_laser, grid_point, angle_increment):
         laser_point = self._transform_2d_point(grid_to_laser, grid_point)
         x, y = laser_point
@@ -190,7 +206,7 @@ class Finder():
             parallel_coeffs = self._get_parallel_ray_coeffs(closest_ray[1], parallel_component_to_ray)
         perp_coeff = self._get_perpendicular_ray_coeff(perp_component_to_ray, closest_ray[1], angle_increment)
         free, occupied = parallel_coeffs * perp_coeff
-        self.grid[int(grid_point[1]), int(grid_point[0])] = np.array([free, occupied, 1 - free - occupied])
+        self._fuse_measurement_for_grid_point(grid_point,  np.array([free, occupied, 1 - free - occupied]))
 
 
     def _update_grid(self, laser_to_odom, odom_to_laser, observations, max_range, angle_increment):
@@ -247,11 +263,24 @@ class Finder():
             observations[i] = np.array([(angle + TWO_PI) % TWO_PI, dist, is_end_occupied])
         self._update_grid(laser_to_odom, odom_to_laser, observations, msg.range_max, msg.angle_increment)
         self.last_update = time
+    def move(self, linear_vel, angular_vel):
+        """Send a velocity command (linear vel in m/s, angular vel in rad/s)."""
+        # Setting velocities.
+        twist_msg = Twist()
+
+        twist_msg.linear.x = linear_vel
+        twist_msg.angular.z = angular_vel
+        self._cmd_pub.publish(twist_msg)
+    def stop(self):
+        """Stop the robot."""
+        twist_msg = Twist()
+        self._cmd_pub.publish(twist_msg)
 
     def publish(self):
         """Start publishing the occupancy grid"""
         rate = rospy.Rate(self.publish_frequency)
         while not rospy.is_shutdown():
+            # self.move(0, 0.2)
             grid_msg = OccupancyGrid()
             grid_msg.header.stamp = rospy.get_rostime()
             grid_msg.header.frame_id = 'odom'
