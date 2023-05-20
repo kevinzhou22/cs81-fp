@@ -16,6 +16,7 @@ from nav_msgs.msg import OccupancyGrid, MapMetaData # pylint: disable=import-err
 
 import tf # pylint: disable=import-error
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Topic names
 DEFAULT_SCAN_TOPIC = 'base_scan' # scan if using turtlebot
@@ -25,12 +26,13 @@ DEFAULT_OCCUPANCY_GRID_TOPIC = 'map'
 DEFAULT_SCAN_FRAME_ID = 'base_laser_link' # base_scan if using turtlebot
 
 # Parameters
-DEFAULT_RESOLUTION = 0.3 # m
-DEFAULT_GRID_WIDTH = 40 # grid cells
-DEFAULT_GRID_HEIGHT = 40 # grid cells
+DEFAULT_RESOLUTION = 0.1 # m
+DEFAULT_GRID_WIDTH = 250 # grid cells
+DEFAULT_GRID_HEIGHT = 200 # grid cells
 DEFAULT_GRID_TRANSLATION = (-5, -5) # m
 DEFAULT_GRID_ROTATION = 0 # yaw
-LASER_PRECISION = 0.05 # m 
+LASER_MIN_ERROR = 0.05 # m 
+LASER_PERCENT_INCREASE_ACCURACY = 0.005 # percent
 
 # Frequency at which the loop operates
 PUBLISH_FREQUENCY = 5 #Hz.
@@ -50,7 +52,8 @@ class Finder():
         grid_height=DEFAULT_GRID_HEIGHT,
         grid_translation=DEFAULT_GRID_TRANSLATION,
         grid_rotation=DEFAULT_GRID_ROTATION,
-        laser_precision=LASER_PRECISION
+        laser_min_error=LASER_MIN_ERROR,
+        laser_percent_increase_accuracy=LASER_PERCENT_INCREASE_ACCURACY
         ):
         """Constructor."""
 
@@ -65,7 +68,8 @@ class Finder():
         self.grid_height = grid_height
         self.grid_width = grid_width
         self.resolution = resolution
-        self.laser_precision = laser_precision
+        self.laser_min_error = laser_min_error
+        self.laser_percent_increase_accuracy = laser_percent_increase_accuracy
         # state
         # (free, occupied, unknown)
         self.grid = np.tile(np.array([0, 0, 1], dtype=np.float64),(grid_height, grid_width, 1),)
@@ -85,6 +89,7 @@ class Finder():
         self.grid_to_odom = np.matmul(np.matmul(t, R), scale)
         self.odom_to_grid = np.linalg.inv(self.grid_to_odom)
         self.map_metadata = self._get_map_metadata(resolution, grid_width, grid_height, grid_translation, grid_rotation)
+        self.points = []
 
     
     def _get_map_metadata(self, resolution, width, height, translation, rotation):
@@ -134,27 +139,40 @@ class Finder():
 
     def _get_coordinates_from_angle_and_distance(self, angle, distance):
         return (np.cos(angle) * distance, np.sin(angle) * distance)
-
+    def _get_laser_accuracy(self, laser_distance):
+        return self.laser_min_error + laser_distance * self.laser_percent_increase_accuracy
     def _get_perpendicular_ray_coeff(self, horizontal_component, ray_distance, angle_increment):
-        std_dev = abs(np.sin(angle_increment / 2)) * ray_distance
+        # we scale the std_dev with the sqrt of 1/2 the gap between rays
+        # this is to reflect that as we go farther, the exact middle of 
+        std_dev = abs(np.sin(angle_increment / 2)) * np.sqrt(ray_distance)
         coeff = np.exp(- (horizontal_component ** 2) / (2 * (std_dev ** 2)))
         return coeff
 
     def _get_parallel_ray_coeffs(self, laser_distance, parallel_component):
         x = parallel_component - laser_distance
-        free = 1 / (1 + np.exp(30 * (x + (self.laser_precision * 2))))
-        unknown = 1 / (1 + np.exp(-30 * (x - (self.laser_precision * 2))))
+        std_dev = self._get_laser_accuracy(laser_distance)
+        # these equations manually tuned to resemble those of a 2017 research paper on the topic
+        free = 1 / (1 + np.exp(30 * (x +  std_dev)))
+        unknown = 1 / (1 + np.exp(-30 * (x - std_dev)))
         occupied = 1 - free - unknown
+        if (len(self.points) == 5000):
+            converted = np.array(self.points)
+            plt.scatter(converted[:, 0], converted[:, 1])
+            plt.scatter(converted[:, 0], converted[:, 2])
+            plt.scatter(converted[:, 0], converted[:, 3])
+            plt.savefig("foo.png")
+            self.points.append(0)
+        elif len(self.points) < 5000:
+            self.points.append((x / std_dev, free, unknown, occupied))
         return np.array([free, occupied])
 
-
-
+        
     def _update_grid_for_point(self, sorted_observations, grid_to_laser, grid_point, angle_increment):
         laser_point = self._transform_2d_point(grid_to_laser, grid_point)
         x, y = laser_point
         angle = (np.arctan2(y, x) + TWO_PI) % TWO_PI
         distance = np.linalg.norm(np.array(laser_point))
-        # taken from https://stackoverflow.com/a/26026189
+        # finding closest angle methodology taken from https://stackoverflow.com/a/26026189
         angles = sorted_observations[:, 0]
         idx = np.searchsorted(angles, angle, side="left")
         if idx > 0 and (idx == len(angles) or math.fabs(angle - angles[idx-1]) < math.fabs(angle - angles[idx])):
@@ -164,9 +182,9 @@ class Finder():
         perp_component_to_ray = abs(np.sin(angle_to_ray)) * distance
         parallel_component_to_ray = abs(np.cos(angle_to_ray)) * distance
         # heuristic to avoid doing unnecessary calculations 
-        if parallel_component_to_ray > closest_ray[1] + 5 * self.laser_precision:
+        if parallel_component_to_ray > closest_ray[1] + 5 * self._get_laser_accuracy(closest_ray[1]):
             parallel_coeffs = np.array([0, 0])
-        elif parallel_component_to_ray < closest_ray[1] - 5 * self.laser_precision:
+        elif parallel_component_to_ray < closest_ray[1] - 5 * self._get_laser_accuracy(closest_ray[1]):
             parallel_coeffs = np.array([1, 0])
         else:
             parallel_coeffs = self._get_parallel_ray_coeffs(closest_ray[1], parallel_component_to_ray)
@@ -203,10 +221,6 @@ class Finder():
         for y in range(box_y_start, box_y_end + 1):
             for x in range(box_x_start, box_x_end + 1):
                 self._update_grid_for_point(sorted_observations, grid_to_laser, (x, y), angle_increment)
-
-        # process all observations to convert angles into 0-360 (eventually: calculate std dev of models)
-        # iterate through all grid cells in a bounding box
-        # convert grid cell coordinates to laser and find angle in orientation
         
     def _laser_callback(self, msg):
         """Processing of laser message."""
@@ -242,7 +256,7 @@ class Finder():
             grid_msg.header.stamp = rospy.get_rostime()
             grid_msg.header.frame_id = 'odom'
             grid_msg.info = self.map_metadata
-            grid_msg.data = np.rint(self.grid[:,:, 2] * 100).astype(int).flatten()
+            grid_msg.data = np.rint(self.grid[:,:, 1] * 100).astype(int).flatten()
             self._grid_pub.publish(grid_msg)
             rate.sleep()
 
