@@ -19,33 +19,41 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Topic names
-DEFAULT_SCAN_TOPIC = 'base_scan' # scan if using turtlebot
+DEFAULT_SCAN_TOPIC = 'robot_0/base_scan' # scan if using turtlebot
 DEFAULT_OCCUPANCY_GRID_TOPIC = 'map'
-DEFAULT_CMD_VEL_TOPIC = 'cmd_vel'
+DEFAULT_CMD_VEL_TOPIC = 'robot_0/cmd_vel'
 
 # Frame names
-DEFAULT_SCAN_FRAME_ID = 'base_laser_link' # base_scan if using turtlebot
+DEFAULT_SCAN_FRAME_ID = 'robot_0/base_laser_link' # base_scan if using turtlebot
 
 # Parameters
 DEFAULT_RESOLUTION = 0.1 # m
-DEFAULT_GRID_WIDTH = 250 # grid cells
-DEFAULT_GRID_HEIGHT = 200 # grid cells
-DEFAULT_GRID_TRANSLATION = (-5, -5) # m
+DEFAULT_GRID_WIDTH =  150 # grid cells
+DEFAULT_GRID_HEIGHT = 150 # grid cells
+DEFAULT_GRID_TRANSLATION = (-6, -6) # m
 DEFAULT_GRID_ROTATION = 0 # yaw
-LASER_MIN_ERROR = 0.04 # m 
+LASER_MIN_ERROR = 0.05 # m 
 LASER_PERCENT_INCREASE_ACCURACY = 0.002 # percent
+INITIALIZATION_DURATION = 15 # s
 
 # Frequency at which the loop operates
-PUBLISH_FREQUENCY = 5 #Hz.
-UPDATE_FREQUENCY = 5
+LOOP_AND_PUBLISH_FREQUENCY = 1 #Hz.
+UPDATE_FREQUENCY = 0.2
+DETECT_FREQUENCY = 0.5
 
 TWO_PI = np.pi * 2
+
+class Mode:
+    BASELINE_INITIALIZATION = 0
+    MOVEMENT_DETECTION = 1
+
 class Finder():
     """Node for assignment"""
     def __init__(
         self,
-        publish_frequency=PUBLISH_FREQUENCY,
+        loop_and_publish_frequency=LOOP_AND_PUBLISH_FREQUENCY,
         update_frequency=UPDATE_FREQUENCY,
+        detect_frequency=DETECT_FREQUENCY,
         scan_topic=DEFAULT_SCAN_TOPIC,
         grid_topic=DEFAULT_OCCUPANCY_GRID_TOPIC,
         cmd_vel_topic=DEFAULT_CMD_VEL_TOPIC,
@@ -55,29 +63,37 @@ class Finder():
         grid_translation=DEFAULT_GRID_TRANSLATION,
         grid_rotation=DEFAULT_GRID_ROTATION,
         laser_min_error=LASER_MIN_ERROR,
-        laser_percent_increase_accuracy=LASER_PERCENT_INCREASE_ACCURACY
+        laser_percent_increase_accuracy=LASER_PERCENT_INCREASE_ACCURACY,
+        initialization_duration=INITIALIZATION_DURATION
         ):
         """Constructor."""
 
         # Setting up publishers/subscribers.
         self._cmd_pub = rospy.Publisher(cmd_vel_topic, Twist, queue_size=1)
         self._grid_pub = rospy.Publisher(grid_topic, OccupancyGrid, queue_size=1)
+        self._anom_pub = rospy.Publisher('anom', OccupancyGrid, queue_size=1)
         self._laser_sub = rospy.Subscriber(scan_topic, LaserScan, self._laser_callback, queue_size=1)
         self.transform_listener = tf.TransformListener()
 
         # parameters
-        self.publish_frequency = publish_frequency
-        self.update_frequency = update_frequency
+        self.loop_and_publish_frequency = loop_and_publish_frequency
+        self.update_interval = rospy.Duration(1 / update_frequency)
+        self.detect_interval = rospy.Duration(1 / detect_frequency)
         self.grid_height = grid_height
         self.grid_width = grid_width
         self.resolution = resolution
         self.laser_min_error = laser_min_error
         self.laser_percent_increase_accuracy = laser_percent_increase_accuracy
+        self.initialization_duration = rospy.Duration(initialization_duration)
         # state
         # (free, occupied, unknown)
         self.grid = np.tile(np.array([0, 0, 1], dtype=np.float64),(grid_height, grid_width, 1),)
+        self.anomalous_grid = np.zeros((grid_height, grid_width))
+        self.anomalous = set()
         np.set_printoptions(threshold=sys.maxsize)
-        self.last_update = rospy.get_rostime()
+        self.last_update = rospy.get_rostime() - self.update_interval
+        self.last_detect = rospy.get_rostime() - self.detect_interval
+        self.mode = Mode.BASELINE_INITIALIZATION
 
         # for convenience, storing some grid variables that can be caluclated dynamically
         scale_ratio = resolution
@@ -115,7 +131,7 @@ class Finder():
         map_metadata.origin = grid_origin
         return map_metadata
 
-    def _get_transformation_matrix(self, target, source):
+    def _get_transformation_matrix(self, target, source, time=rospy.Time(0)):
         """Gets the transformation matrix from target to source, looping until found"""
         has_found_transformation = False
         # it's possible the relevant transformation has not been published yet
@@ -125,12 +141,13 @@ class Finder():
                 (trans, rot) = self.transform_listener.lookupTransform(
                     target,
                     source, 
-                    rospy.Time(0)
+                    time
                 )
                 has_found_transformation = True
-            except tf.LookupException:
-                rospy.sleep(0.5)
+            except (tf.LookupException, tf.ExtrapolationException):
+                rospy.sleep(0.1)
                 continue
+
         t = tf.transformations.translation_matrix(trans)
         R = tf.transformations.quaternion_matrix(rot)
         transformation_matrix = np.matmul(t, R)
@@ -158,15 +175,6 @@ class Finder():
         free = 1 / (1 + np.exp(30 * (x +  std_dev)))
         unknown = 1 / (1 + np.exp(-30 * (x - std_dev)))
         occupied = 1 - free - unknown
-        # if (len(self.points) == 5000):
-        #     converted = np.array(self.points)
-        #     plt.scatter(converted[:, 0], converted[:, 1])
-        #     plt.scatter(converted[:, 0], converted[:, 2])
-        #     plt.scatter(converted[:, 0], converted[:, 3])
-        #     plt.savefig("foo.png")
-        #     self.points.append(0)
-        # elif len(self.points) < 5000:
-        #     self.points.append((x / std_dev, free, unknown, occupied))
         return np.array([free, occupied])
 
     def _fuse_measurement_for_grid_point(self, grid_point, new):
@@ -206,8 +214,9 @@ class Finder():
             parallel_coeffs = self._get_parallel_ray_coeffs(closest_ray[1], parallel_component_to_ray)
         perp_coeff = self._get_perpendicular_ray_coeff(perp_component_to_ray, closest_ray[1], angle_increment)
         free, occupied = parallel_coeffs * perp_coeff
-        self._fuse_measurement_for_grid_point(grid_point,  np.array([free, occupied, 1 - free - occupied]))
-
+        new_measurement = np.array([free, occupied, 1 - free - occupied])
+        print(new_measurement)
+        self._fuse_measurement_for_grid_point(grid_point, new_measurement)
 
     def _update_grid(self, laser_to_odom, odom_to_laser, observations, max_range, angle_increment):
         """Observations are ((laser x, laser y), obstacle)"""
@@ -229,7 +238,7 @@ class Finder():
         first_obs[0] += TWO_PI
         sorted_observations = np.insert(sorted_observations, 0, last_obs, axis=0)
         sorted_observations = np.append(sorted_observations, np.array([first_obs]), axis=0)
-        
+        print(max_observed_range)
         box_x_start = int(round(max(0, grid_start[0] - max_observed_range)))
         box_x_end = int(round(min(self.grid.shape[1] - 1, grid_start[0] + max_observed_range)))
         box_y_start = int(round(max(0, grid_start[1] - max_observed_range)))
@@ -237,13 +246,46 @@ class Finder():
         for y in range(box_y_start, box_y_end + 1):
             for x in range(box_x_start, box_x_end + 1):
                 self._update_grid_for_point(sorted_observations, grid_to_laser, (x, y), angle_increment)
-        
+
+    def _extract_occupied_anomalies(self, laser_to_odom, observations):
+            self.anomalous_grid = np.zeros((self.grid_height, self.grid_width))
+            anomalous_odom_points = []
+            for observation in observations:
+                angle, distance, was_obstacle_found = observation
+                if not was_obstacle_found:
+                    continue
+                laser_coords = self._get_coordinates_from_angle_and_distance(angle, distance)
+                odom_coords = self._transform_2d_point(laser_to_odom, laser_coords)
+                grid_coords = np.array(self._transform_2d_point(self.odom_to_grid, odom_coords))
+                upper = np.ceil(grid_coords).astype(int)
+                lower = np.floor(grid_coords).astype(int)
+                upper_left = self.grid[upper[1], lower[0]]
+                upper_right = self.grid[upper[1], upper[0]]
+                lower_left = self.grid[lower[1], lower[0]]
+                lower_right = self.grid[lower[1], upper[0]]
+                x_diff = upper[0] - lower[0]
+                y_diff = upper[1] - lower[1]
+                left_coeff = (upper[0] - grid_coords[0]) / x_diff
+                right_coeff = (grid_coords[0] - lower[0]) / x_diff 
+                x_2 = left_coeff * upper_left + right_coeff * upper_right
+                x_1 = left_coeff * lower_left + right_coeff * lower_right
+                state = (upper[1] - grid_coords[1]) / y_diff * x_1 + (grid_coords[1] - lower[1]) / y_diff * x_2
+                conflict = state[0]
+                if conflict > 0.99:
+                    print('found')
+                    anomalous_odom_points.append(odom_coords)
+                    print(upper_left, upper_right, lower_left, lower_right, state)
+            print(len(anomalous_odom_points))
+                
     def _laser_callback(self, msg):
         """Processing of laser message."""
-        laser_to_odom = self._get_transformation_matrix('odom', 'base_laser_link')
+        time = msg.header.stamp
+        laser_to_odom = self._get_transformation_matrix('robot_0/odom', 'robot_0/base_laser_link', time)
         odom_to_laser = np.linalg.inv(laser_to_odom)
         time = rospy.get_rostime()
-        if time - self.last_update < rospy.Duration(1 / self.update_frequency):
+        should_update = time - self.last_update >= self.update_interval
+        should_detect = time - self.last_detect >= self.detect_interval
+        if not should_update and not should_detect:
             return
         # (angle, distance, was_obstacle_found)
         observations = np.zeros((len(msg.ranges), 3))
@@ -261,8 +303,12 @@ class Finder():
                 is_end_occupied = False
 
             observations[i] = np.array([(angle + TWO_PI) % TWO_PI, dist, is_end_occupied])
-        self._update_grid(laser_to_odom, odom_to_laser, observations, msg.range_max, msg.angle_increment)
-        self.last_update = time
+        if self.mode == Mode.MOVEMENT_DETECTION and should_detect:
+            self._extract_occupied_anomalies(laser_to_odom, observations)
+            self.last_detect = time
+        if should_update:
+            self._update_grid(laser_to_odom, odom_to_laser, observations, msg.range_max, msg.angle_increment)
+            self.last_update = time
     def move(self, linear_vel, angular_vel):
         """Send a velocity command (linear vel in m/s, angular vel in rad/s)."""
         # Setting velocities.
@@ -278,15 +324,22 @@ class Finder():
 
     def publish(self):
         """Start publishing the occupancy grid"""
-        rate = rospy.Rate(self.publish_frequency)
+        rate = rospy.Rate(self.loop_and_publish_frequency)
+        start_time = rospy.get_rostime()
         while not rospy.is_shutdown():
-            # self.move(0, 0.2)
+            if self.mode == Mode.BASELINE_INITIALIZATION:
+                self.move(0, 0.3)
+                if rospy.get_rostime() - start_time > self.initialization_duration:
+                    self.stop()
+                    self.mode = Mode.MOVEMENT_DETECTION                
             grid_msg = OccupancyGrid()
             grid_msg.header.stamp = rospy.get_rostime()
-            grid_msg.header.frame_id = 'odom'
+            grid_msg.header.frame_id = 'robot_0/odom'
             grid_msg.info = self.map_metadata
             grid_msg.data = np.rint(self.grid[:,:, 1] * 100).astype(int).flatten()
             self._grid_pub.publish(grid_msg)
+            # grid_msg.data = self.anomalous_grid.flatten()
+            # self._anom_pub.publish(grid_msg)
             rate.sleep()
 
 def main():
