@@ -24,9 +24,8 @@ define rosbot position
   drive "diff"
   color "gray"
   
-  lidar(pose [ 0.0 0.0 0.1 0.0 ])
+  lidar(pose [ 0.0 0.0 -0.1 0.0 ])
 )
-
 
 
 
