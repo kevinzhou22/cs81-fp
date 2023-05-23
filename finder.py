@@ -17,6 +17,7 @@ from nav_msgs.msg import OccupancyGrid, MapMetaData # pylint: disable=import-err
 import tf # pylint: disable=import-error
 import numpy as np
 import matplotlib.pyplot as plt
+from lock_on import MovingObjectDetector
 
 # Topic names
 DEFAULT_SCAN_TOPIC = 'robot_0/base_scan' 
@@ -43,6 +44,9 @@ UPDATE_FREQUENCY = 0.5
 DETECT_FREQUENCY = 2
 
 TWO_PI = np.pi * 2
+
+# Detector from lock_on.py
+detector = MovingObjectDetector(eps=1.5, min_samples=4)
 
 class Mode:
     BASELINE_INITIALIZATION = 0
@@ -308,6 +312,9 @@ class Finder():
         if self.mode == Mode.MOVEMENT_DETECTION and should_detect:
             anomalies = self._extract_occupied_anomalies(laser_to_odom, observations)
             print(anomalies)
+            centroid1 = detector.detect_object(anomalies)
+            # should print the (x, y) coordinates of the center of the object
+            print("Object location:", centroid1, "\n")
             self.last_detect = time
         if should_update:
             self._update_grid(laser_to_odom, odom_to_laser, observations, msg.range_max, msg.angle_increment)
