@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 
 import math
+import random
+
+DECAY_RATE = 0.5
 
 class QLearning:
     """
@@ -27,6 +30,7 @@ class QLearning:
         self.best_policy = {}
         self.height = height
         self.width = width
+        self.epsilon = 1
         
         # initializing q_table with states, actions, and value of 0
         for i in range(width):
@@ -83,10 +87,14 @@ class QLearning:
         Returns:
             float: reward at provided state
         """
+        # bonus = 0
+        # if point[0] > 8 or point[0] < 2:
+        #     if point[1] > 8 or point[1] < 2:
+        #         bonus = 5
 
         return -math.sqrt((self.target[0] - point[0])**2 + (self.target[1] - point[1])**2)
     
-    def training(self, iterations = 3):
+    def training(self, iterations = 5):
         """
         Performs the Q-learning training process
 
@@ -96,6 +104,7 @@ class QLearning:
         for i in range(iterations):
             for key in self.q_table.keys():
                 self.update_q_table(key)
+            self.get_best_policy(self.q_table)
     
     def get_best_policy(self, q_table):
         """
@@ -108,6 +117,8 @@ class QLearning:
         for key in q_table.keys():
             all_states.add((key[0], key[1]))
         
+        self.epsilon = self.epsilon * DECAY_RATE
+        
         for state in all_states:
             actions = {
                 "right": self.q_table[(state[0], state[1], "right")],
@@ -115,7 +126,15 @@ class QLearning:
                 "up": self.q_table[(state[0], state[1], "up")],
                 "down": self.q_table[(state[0], state[1], "down")]
             }
-            self.best_policy[(state[0], state[1])] = max(actions, key = actions.get)
+
+            # Implementation of epsilon-greedy policy
+            random_val = random.random()
+            if random_val > self.epsilon:
+                self.best_policy[(state[0], state[1])] = max(actions, key = actions.get)
+            else:
+                pos_actions = ["right", "left", "up", "down"]
+                random_index = random.randint(0, 3)
+                self.best_policy[(state[0], state[1])] = pos_actions[random_index]
 
 if __name__ == "__main__":
     
