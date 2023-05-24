@@ -7,14 +7,16 @@ import math
 
 # rospy libraries
 import rospy
-from geometry_msgs.msg import Twist # message type
+from geometry_msgs.msg import Twist, PoseStamped # message type
 from nav_msgs.msg import OccupancyGrid
+import tf
 
 # CONSTANTS
 # Frequency at which the loop operates
 VELOCITY = 0.2 #m/s
 ANG_VELOCITY = math.pi/4.0 #rad/s
 DEFAULT_SCAN_TOPIC = 'base_scan'
+DEFAULT_OBJ_TOPIC = 'stalked'
 
 class Grid:
     """Initializes a Grid class which stores height, width, resolution data."""
@@ -34,22 +36,73 @@ class qMove:
         self.map = None # the variable containing the map.
         self.height = None # height of the map
         self.width = None # width of the map
-        self.curr_x = 5 # holds the current x position
-        self.curr_y = 5 # holds the current y position
-        self.curr_angle = 0 # holds the current angle
-        self.target_loc = (2, 2)
-        
+        self.curr_x = None # holds the current x position
+        self.curr_y = None # holds the current y position
+        self.curr_angle = None # holds the current angle
+        self.target_loc = None
+        self._obj_sub = rospy.Subscriber(DEFAULT_OBJ_TOPIC, PoseStamped, self._obj_callback, queue_size=1)
+        self.map_T_odom = np.array([[1, 0, 0, 5],
+                                    [0, 1, 0, 5],
+                                    [0, 0, 1, 0],
+                                    [0, 0, 0, 1]])
+        self.transform_listener = tf.TransformListener()
+    def _obj_callback(self, msg):
+        # convert odom to map
+        odom_T_bl = self._get_transformation_matrix('robot_0/odom', 'robot_0/base_link')
+        print(odom_T_bl)
 
+
+        robot_loc_odom = self._transform_2d_point(odom_T_bl, ((0, 0)))
+        robot_loc_map = self._transform_2d_point(self.map_T_odom, robot_loc_odom)
+
+        
+        point_map = self._transform_2d_point(self.map_T_odom, ((msg.pose.position.x, msg.pose.position.y)))
+
+        self.target_loc = point_map
+        self.curr_x = int(round(robot_loc_map[0]))
+        self.curr_y = int(round(robot_loc_map[1]))
+        self.curr_angle = 0
+
+        self.get_table()
+        print(self.q_policy)
+        self.follow_policy()
+
+    def _get_transformation_matrix(self, target, source, time=rospy.Time(0)):
+        """Gets the transformation matrix from target to source, looping until found"""
+        has_found_transformation = False
+        # it's possible the relevant transformation has not been published yet
+        # this just loops until the transformation is acquired
+        while not has_found_transformation:
+            try:
+                (trans, rot) = self.transform_listener.lookupTransform(
+                    target,
+                    source, 
+                    time
+                )
+                has_found_transformation = True
+            except (tf.LookupException, tf.ExtrapolationException):
+                rospy.sleep(0.1)
+                continue
+
+        t = tf.transformations.translation_matrix(trans)
+        R = tf.transformations.quaternion_matrix(rot)
+        transformation_matrix = np.matmul(t, R)
+        return transformation_matrix
+    
+    
+
+    def _transform_2d_point(self, transformation_matrix, point):
+        x, y = point
+        transformed_point = np.matmul(transformation_matrix, np.array([x, y, 0, 1], dtype='float64'))
+        return (transformed_point[0], transformed_point[1])
+    
     def map_callback(self, msg):
         """Initializes map as Grid object; calls method to get best policy"""
         # create grid object upon receipt of map
         self.map = Grid(msg.data, msg.info.width, msg.info.height, msg.info.resolution)
-        self.height  = int(msg.info.height*msg.info.resolution)
+        self.height = int(msg.info.height*msg.info.resolution)
         self.width = int(msg.info.width*msg.info.resolution)
 
-        print("Height and Width:")
-        print(self.height)
-        print(self.width)
         # if policy has not been created; generate table
         if self.q_policy == None:
             self.get_table()
@@ -139,8 +192,5 @@ if __name__ == "__main__":
     rospy.init_node("movement")
     p = qMove()
     rospy.sleep(2)
-    
-    p.get_table()
-    p.follow_policy()
 
     rospy.spin()
