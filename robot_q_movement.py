@@ -13,7 +13,7 @@ import tf
 
 # CONSTANTS
 # Frequency at which the loop operates
-VELOCITY = 0.2 #m/s
+VELOCITY = 0.3 #m/s
 ANG_VELOCITY = math.pi/4.0 #rad/s
 DEFAULT_SCAN_TOPIC = 'base_scan'
 DEFAULT_OBJ_TOPIC = 'stalked'
@@ -46,8 +46,11 @@ class qMove:
                                     [0, 0, 1, 0],
                                     [0, 0, 0, 1]])
         self.transform_listener = tf.TransformListener()
+        self.done_travelling = False
     
     def _obj_callback(self, msg):
+        self.done_travelling = False
+        
         # Find the position of the robot in odom reference frame
         odom_T_bl = self._get_transformation_matrix('robot_0/odom', 'robot_0/base_link')
         yaw = self._get_rotation('robot_0/base_link', 'robot_0/odom')
@@ -63,10 +66,11 @@ class qMove:
         stalker_map = self._transform_2d_point(self.map_T_odom, ((msg.pose.position.x, msg.pose.position.y)))
         self.target_loc = (int(round(stalker_map[0])), int(round(stalker_map[1])))
 
-        self.get_table()
-        print("Targeted Location Locked!")
-        print(self.target_loc)
-        self.follow_policy()
+        while (self.done_travelling != True):
+            print("Targeted Location Locked!")
+            print(self.target_loc)
+            self.get_table()
+            self.done_travelling = self.follow_policy()
 
     
     def _get_transformation_matrix(self, target, source, time=rospy.Time(0)):
@@ -185,6 +189,7 @@ class qMove:
                     self.rotate_abs(-math.pi)
                     self.translate(1)
                     self.curr_x = self.curr_x - 1
+        return True
     
     def translate(self, distance):
         """Moves the robot in a straight line"""
