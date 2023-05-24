@@ -22,15 +22,15 @@ DEFAULT_SCAN_TOPIC = 'robot_1/base_scan' # name of topic for Stage simulator. Fo
 FREQUENCY = 10 #Hz.
 
 # Velocities that will be used (feel free to tune)
-LINEAR_VELOCITY = 0.1 # m/s
+LINEAR_VELOCITY = 0.5 # m/s
 ANGULAR_VELOCITY = math.pi/4 # rad/s
 
 # Threshold of minimum clearance distance (feel free to tune)
 MIN_THRESHOLD_DISTANCE = 0.75 # m, threshold distance, should be smaller than range_max
 
 # Field of view in radians that is checked in front of the robot (feel free to tune)
-MIN_SCAN_ANGLE_RAD = -45.0 / 180 * math.pi;
-MAX_SCAN_ANGLE_RAD = +45.0 / 180 * math.pi;
+MIN_SCAN_ANGLE_RAD = -45.0 / 180 * math.pi
+MAX_SCAN_ANGLE_RAD = +45.0 / 180 * math.pi
 
 
 class RandomWalk():
