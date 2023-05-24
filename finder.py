@@ -2,7 +2,7 @@
 #The line above is important so that this file is interpreted with Python when running it.
 
 # Author: Kevin Zhou
-# Date: April 12, 2023
+# Date: May 23, 2023
 
 # Import of python modules.
 import sys
@@ -36,17 +36,16 @@ DEFAULT_GRID_TRANSLATION = (-6, -6) # m
 DEFAULT_GRID_ROTATION = 0 # yaw
 LASER_MIN_ERROR = 0.05 # m 
 LASER_PERCENT_INCREASE_ACCURACY = 0.002 # percent
-INITIALIZATION_DURATION = 15 # s
+INITIALIZATION_DURATION = 5 # s
 
 # Frequency at which the loop operates
 LOOP_AND_PUBLISH_FREQUENCY = 1 #Hz.
 UPDATE_FREQUENCY = 0.5
-DETECT_FREQUENCY = 2
+DETECT_FREQUENCY = 10
 
 TWO_PI = np.pi * 2
 
 # Detector from lock_on.py
-detector = MovingObjectDetector(eps=1.5, min_samples=4)
 
 class Mode:
     BASELINE_INITIALIZATION = 0
@@ -119,6 +118,8 @@ class Finder():
         self.odom_to_grid = np.linalg.inv(self.grid_to_odom)
         self.map_metadata = self._get_map_metadata(resolution, grid_width, grid_height, grid_translation, grid_rotation)
         self.points = []
+
+        self.detector = MovingObjectDetector(eps=1.5, min_samples=4)
 
     
     def _get_map_metadata(self, resolution, width, height, translation, rotation):
@@ -285,6 +286,7 @@ class Finder():
                 
     def _laser_callback(self, msg):
         """Processing of laser message."""
+        print('laser')
         time = msg.header.stamp
         laser_to_odom = self._get_transformation_matrix(self.odom_frame_id, self.scan_frame_id, time)
         odom_to_laser = np.linalg.inv(laser_to_odom)
@@ -312,7 +314,7 @@ class Finder():
         if self.mode == Mode.MOVEMENT_DETECTION and should_detect:
             anomalies = self._extract_occupied_anomalies(laser_to_odom, observations)
             print(anomalies)
-            centroid1 = detector.detect_object(anomalies)
+            centroid1 = self.detector.detect_object(anomalies)
             # should print the (x, y) coordinates of the center of the object
             print("Object location:", centroid1, "\n")
             self.last_detect = time
@@ -346,7 +348,7 @@ class Finder():
             grid_msg.header.stamp = rospy.get_rostime()
             grid_msg.header.frame_id = self.odom_frame_id
             grid_msg.info = self.map_metadata
-            grid_msg.data = np.rint(self.grid[:,:, 1] * 100).astype(int).flatten()
+            grid_msg.data = np.rint(self.grid[:,:, 2] * 100).astype(int).flatten()
             self._grid_pub.publish(grid_msg)
             # grid_msg.data = self.anomalous_grid.flatten()
             # self._anom_pub.publish(grid_msg)

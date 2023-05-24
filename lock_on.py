@@ -5,9 +5,14 @@
 
 import numpy as np
 from sklearn.cluster import DBSCAN
+import rospy # module for ROS APIs pylint: disable=import-error
+from geometry_msgs.msg import PoseStamped # message type for cmd_vel pylint: disable=import-error
+
+DEFAULT_OBJ_TOPIC = 'stalked' 
+DEFAULT_ODOM_FRAME_ID = 'robot_0/odom'
 
 class MovingObjectDetector:
-    def __init__(self, eps=1.5, min_samples=4):
+    def __init__(self, eps=1.5, min_samples=4, obj_topic=DEFAULT_OBJ_TOPIC):
         
         # maximum distance between two samples for them to be considered as in the same neighborhood
         # default is 1.5 grid units
@@ -16,8 +21,10 @@ class MovingObjectDetector:
         # minimum number of samples in a neighborhood for a point to be considered as a core point
         # default is 4 points 
         self.min_samples = min_samples
+        self._obj_pub = rospy.Publisher(obj_topic, PoseStamped, queue_size=1)
 
     def detect_object(self, points):
+        print('called')
         points = np.array(points)
         if len(points) == 0:
             return None
@@ -39,7 +46,12 @@ class MovingObjectDetector:
 
         # compute the center of mass of that cluster
         centroid = np.mean(largest_cluster, axis=0)
-
+        pose = PoseStamped()
+        pose.pose.position.x = centroid[0]
+        pose.pose.position.y = centroid[1]
+        pose.header.stamp = rospy.get_rostime()
+        pose.header.frame_id = DEFAULT_ODOM_FRAME_ID
+        self._obj_pub.publish(pose)
         print("centroid:\n", centroid)
 
         return centroid
