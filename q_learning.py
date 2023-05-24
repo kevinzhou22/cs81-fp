@@ -116,8 +116,9 @@ class QLearning:
         all_states = set()
         for key in q_table.keys():
             all_states.add((key[0], key[1]))
-        
+
         self.epsilon = self.epsilon * DECAY_RATE
+        
         
         for state in all_states:
             actions = {
