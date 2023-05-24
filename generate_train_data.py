@@ -32,7 +32,7 @@ ROBOT_CMD_TOPIC = '/robot_0/cmd_vel'
 OBJECT_ODOM_TOPIC = '/robot_1/odom'
 
 class GenerateTrainData:
-    def __init__(self, node_name, range_action_dict, robot_odom_topic=ROBOT_ODOM_TOPIC, robot_cmd_topic=ROBOT_CMD_TOPIC, object_odom_topic=OBJECT_ODOM_TOPIC):
+    def __init__(self, node_name, robot_odom_topic=ROBOT_ODOM_TOPIC, robot_cmd_topic=ROBOT_CMD_TOPIC, object_odom_topic=OBJECT_ODOM_TOPIC):
         rospy.init_node(node_name)
 
         #Subscribers and Publishers
@@ -55,7 +55,7 @@ class GenerateTrainData:
         orientation = msg.pose.pose.orientation
         _, _, theta = tf.transformations.euler_from_quaternion([orientation.x, orientation.y, orientation.z, orientation.w])
         self.curr_robot_pose = (x, y, theta)
-        print("Curr robot pose:", self.curr_robot_pose)
+        #print("Curr robot pose:", self.curr_robot_pose)
 
     def _set_object_pose_cb(self, msg):
         #Sets curr object pose
@@ -63,7 +63,7 @@ class GenerateTrainData:
         orientation = msg.pose.pose.orientation
         _, _, theta = tf.transformations.euler_from_quaternion([orientation.x, orientation.y, orientation.z, orientation.w])
         self.curr_object_pose = (x, y, theta)
-        print("Curr object pose:", self.curr_object_pose)
+        #print("Curr object pose:", self.curr_object_pose)
 
     def get_curr_robot_pose(self):
         #Returns current robot pose
@@ -92,7 +92,7 @@ class GenerateTrainData:
         twist_msg.angular.z = angular_vel
         start_time = rospy.get_rostime()
 
-        while rospy.get_rostime() - start_time <= duration:
+        while rospy.get_rostime() - start_time <= rospy.Duration(duration):
             self._robot_cmd_pub.publish(twist_msg)
 
     def get_next_state(self, action):
@@ -133,17 +133,27 @@ class GenerateTrainData:
             for w in w_range:
                 for t in t_range:
                     action = (v, w, t)
+                    print("Action:", action)
                     next_state = self.get_next_state(action) #Get next state: resultant robot pose, object pose
                     data_pt = (curr_state, next_state) #Store in data
                     data.append(data_pt)
-                    reset_simulation() #TODO: Reset simulation
+                    #reset_simulation() #TODO: Reset simulation
                     rospy.sleep(1)
+        print("Data:", len(data), data)
+
+    """
+    PO Sanity check:
+    The robot should move at each iteration/action sent. DONE
+    We now do the resetting of simulation
+    
+    
+    """
 
 if __name__ == "__main__":
     #Range per action: (tuple) start, stop, number of evenly-spaced data points
-    range_action_dict = {'v': (0, 1.0, 20),
-                         'w': (-math.pi, math.pi, 50),
-                         't': (0, 2.0, 10)}
+    range_action_dict = {'v': (0, 1.0, 5),
+                         'w': (-math.pi, math.pi, 5),
+                         't': (0, 2.0, 5)}
 
     train_data_generator = GenerateTrainData('gen_train_data')
     train_data_generator.generate_train_data(range_action_dict)
