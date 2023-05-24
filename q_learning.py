@@ -3,8 +3,6 @@
 import math
 import random
 
-DECAY_RATE = 0.5
-
 class QLearning:
     """
     QLearning class implements the Q-learning algorithm
@@ -117,7 +115,6 @@ class QLearning:
         for key in q_table.keys():
             all_states.add((key[0], key[1]))
         
-        self.epsilon = self.epsilon * DECAY_RATE
         
         for state in all_states:
             actions = {
@@ -127,14 +124,7 @@ class QLearning:
                 "down": self.q_table[(state[0], state[1], "down")]
             }
 
-            # Implementation of epsilon-greedy policy
-            random_val = random.random()
-            if random_val > self.epsilon:
-                self.best_policy[(state[0], state[1])] = max(actions, key = actions.get)
-            else:
-                pos_actions = ["right", "left", "up", "down"]
-                random_index = random.randint(0, 3)
-                self.best_policy[(state[0], state[1])] = pos_actions[random_index]
+            self.best_policy[(state[0], state[1])] = max(actions, key = actions.get)
 
 if __name__ == "__main__":
     
