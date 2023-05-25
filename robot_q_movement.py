@@ -5,19 +5,24 @@
 import numpy as np
 import q_learning
 import math
+import random
+from transform import Transform
 
 # rospy libraries
 import rospy
-from geometry_msgs.msg import Twist, PoseStamped # message type
-from nav_msgs.msg import OccupancyGrid
 import tf
+from geometry_msgs.msg import Twist, PoseStamped
+from nav_msgs.msg import OccupancyGrid
+from sensor_msgs.msg import LaserScan
 
 # CONSTANTS
-# Frequency at which the loop operates
 VELOCITY = 0.5 #m/s
 ANG_VELOCITY = math.pi/4.0 #rad/s
-DEFAULT_SCAN_TOPIC = 'base_scan'
+DEFAULT_SCAN_TOPIC = 'robot_0/base_scan'
 DEFAULT_OBJ_TOPIC = 'stalked'
+MIN_SCAN_ANGLE_RAD = -40.0 / 180 * math.pi #rad
+MAX_SCAN_ANGLE_RAD = +40.0 / 180 * math.pi #rad
+MIN_THRESHOLD_DISTANCE = 0.5 #m
 
 class Grid:
     """Initializes a Grid class which stores height, width, resolution data."""
@@ -27,125 +32,133 @@ class Grid:
         self.resolution = resolution
 
 class qMove:
-    def __init__(self):
+    """
+    Subscribes to get the point of the object in motion. Handles the 
+    movement of the robot following policies returned by Q-learning.
+    """
+
+    def __init__(self, scan_angle=[MIN_SCAN_ANGLE_RAD, MAX_SCAN_ANGLE_RAD], min_threshold_distance=MIN_THRESHOLD_DISTANCE):
         """Initialization."""
+
+        # Setting up subscribers for receiving data about laser, map, and moving object
+        self._laser_sub = rospy.Subscriber(DEFAULT_SCAN_TOPIC, LaserScan, self._laser_callback, queue_size=1)
         self.sub = rospy.Subscriber("map", OccupancyGrid, self.map_callback, queue_size=1)
+        self._obj_sub = rospy.Subscriber(DEFAULT_OBJ_TOPIC, PoseStamped, self._obj_callback, queue_size=1) 
+
+        # setting up a publisher to publish velocity messages
         self.publisher = rospy.Publisher("/robot_0/cmd_vel", Twist, queue_size=1)
         self.vel_msg = Twist()
         self.rate = rospy.Rate(10)
-        self.q_policy = None # table holding policies at different states
+
+        # instance variables
+        self.q_policy = None # table to hold policies at different states
         self.map = None # the variable containing the map.
         self.height = None # height of the map
         self.width = None # width of the map
-        self.curr_x = None # holds the current x position
-        self.curr_y = None # holds the current y position
-        self.curr_angle = None # holds the current angle
-        self.target_loc = None
-        self._obj_sub = rospy.Subscriber(DEFAULT_OBJ_TOPIC, PoseStamped, self._obj_callback, queue_size=1) 
+        self.curr_x = None # current x position
+        self.curr_y = None # current y position
+        self.curr_angle = None # current angle
+        self.target_loc = None # location of moving object
         self.map_T_odom = np.array([[1, 0, 0, 5],
                                     [0, 1, 0, 5],
                                     [0, 0, 1, 0],
                                     [0, 0, 0, 1]])
-        self.transform_listener = tf.TransformListener()
-        self.done_travelling = False
+        self.transform = Transform() # access to transformations
+        
+        # Flag variables
+        self.done_travelling = False # has robot taken steps to moving object
+        self._close_obstacle = False # is robot close to a wall or object
+
+        # information of laser scan/object detection
+        self.scan_angle = scan_angle
+        self.min_threshold_distance = min_threshold_distance
+
     
     def _obj_callback(self, msg):
-        self.done_travelling = False
+        """
+        Called upon receipt of point which represents the 
+        belief about the current position of the moving object
+        """
+
+        self.done_travelling = False 
         
         # Find the position of the robot in odom reference frame
-        odom_T_bl = self._get_transformation_matrix('robot_0/odom', 'robot_0/base_link')
-        yaw = self._get_rotation('robot_0/base_link', 'robot_0/odom')
-        robot_loc_odom = self._transform_2d_point(odom_T_bl, ((0, 0)))
+        odom_T_bl = self.transform.get_transformation_matrix('robot_0/odom', 'robot_0/base_link')
+        yaw = self.transform._get_rotation('robot_0/base_link', 'robot_0/odom')
+        robot_loc_odom = self.transform.transform_2d_point(odom_T_bl, ((0, 0)))
 
         # Find the position of the robot in map reference frame
-        robot_loc_map = self._transform_2d_point(self.map_T_odom, robot_loc_odom)
+        robot_loc_map = self.transform.transform_2d_point(self.map_T_odom, robot_loc_odom)
         self.curr_x = int(round(robot_loc_map[0]))
         self.curr_y = int(round(robot_loc_map[1]))
         self.curr_angle = yaw
         
         # position of stalker in map
-        stalker_map = self._transform_2d_point(self.map_T_odom, ((msg.pose.position.x, msg.pose.position.y)))
+        stalker_map = self.transform.transform_2d_point(self.map_T_odom, ((msg.pose.position.x, msg.pose.position.y)))
         self.target_loc = (int(round(stalker_map[0])), int(round(stalker_map[1])))
+
+        # if too close to obstacle, robot rotates
+        if self._close_obstacle == True:
+            print("Detected obstacle! Rotating randomly")
+            rand_angle = random.uniform(-math.pi, math.pi)
+            start_time = rospy.get_rostime()
+            total_time = abs(rand_angle / ANG_VELOCITY)
+            
+            # rotating robot at angular velocity for calculated amount fo time
+            if (rand_angle > 0):
+                self.move(0, ANG_VELOCITY, start_time, total_time)
+            else:
+                self.move(0, -ANG_VELOCITY, start_time, total_time)
+            
+            self._close_obstacle = False
 
         while (self.done_travelling != True):
             print("Targeted Location Locked!")
             print(self.target_loc)
+            # Building table to target location as part of Q-learning
             self.get_table()
+            # following policy generated by table
             self.done_travelling = self.follow_policy()
 
-    
-    def _get_transformation_matrix(self, target, source, time=rospy.Time(0)):
-        """Gets the transformation matrix from target to source, looping until found"""
-        has_found_transformation = False
-        # it's possible the relevant transformation has not been published yet
-        # this just loops until the transformation is acquired
-        while not has_found_transformation:
-            try:
-                (trans, rot) = self.transform_listener.lookupTransform(
-                    target,
-                    source, 
-                    time
-                )
-                has_found_transformation = True
-            except (tf.LookupException, tf.ExtrapolationException):
-                rospy.sleep(0.1)
-                continue
+    def _laser_callback(self, msg):
+        """Called upon receipt of message from laser"""
 
-        t = tf.transformations.translation_matrix(trans)
-        R = tf.transformations.quaternion_matrix(rot)
-        transformation_matrix = np.matmul(t, R)
-        return transformation_matrix
-    
-    
-    def _transform_2d_point(self, transformation_matrix, point):
-        """
-        transforms the inputted point to the reference frame given
-        by the transformation matrix
-        """
-        x, y = point
-        transformed_point = np.matmul(transformation_matrix, np.array([x, y, 0, 1], dtype='float64'))
-        return (transformed_point[0], transformed_point[1])
-    
-    def _get_rotation(self, target, source):
-        """
-        Gets the angle in the pose of the robot in the target
-        w.r.t the source reference frame
-        """
-        has_found_transformation = False
-        while not has_found_transformation:
-            try:
-                trans, rot = self.transform_listener.lookupTransform(
-                    source,
-                    target,
-                    rospy.Time(0)
-                )
-                has_found_transformation = True
-            except tf.LookupException:
-                rospy.sleep(0.5)
-                continue
-        yaw = tf.transformations.euler_from_quaternion(rot)[2]
-        return yaw
-        
+        # Determines whether robot is close to an obstacle
+        if not self._close_obstacle:
+            min_index = max(int(np.floor((self.scan_angle[0] - msg.angle_min) / msg.angle_increment)), 0)
+            max_index = min(int(np.ceil((self.scan_angle[1] - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
 
+            # finds the minimum range value in ranges between min_index and max_index
+            min_range_val = float('inf')
+            for i in range(len(msg.ranges)):
+                if i > min_index and i < max_index:
+                    if msg.ranges[i] < min_range_val:
+                        min_range_val = msg.ranges[i]
+
+            # determines whether obstacle is close enough to robot
+            if (min_range_val < self.min_threshold_distance):
+                self._close_obstacle = True
+    
     def map_callback(self, msg):
         """Initializes map as Grid object; calls method to get best policy"""
+
         # create grid object upon receipt of map
         self.map = Grid(msg.data, msg.info.width, msg.info.height, msg.info.resolution)
         self.height  = int(msg.info.height*msg.info.resolution)
         self.width = int(msg.info.width*msg.info.resolution)
 
-        # if policy has not been created; generate table
+        # if policy has not been created; generate table to create policy
         if self.q_policy == None:
             if self.target_loc != None:
                 self.get_table()
 
     def get_table(self):
-        """Handles Q-learning; sets q_policy instance variable to policy found after training"""
+        """Handles Q-learning; sets q_policy instance variable to best policy found after training"""
         # check to see if map has been read
         if self.map != None:
             # start the q-learning
             q_model = q_learning.QLearning(width=self.width, height=self.height, start_loc=(self.curr_x, self.curr_y), target_loc=self.target_loc)
-            q_model.training(10) # training for 5 iterations
+            q_model.training(10) # training for 10 iterations
             q_model.get_best_policy(q_model.q_table)
             self.q_policy = q_model.best_policy # setting the best policy
         
@@ -194,10 +207,11 @@ class qMove:
                     self.curr_x = self.curr_x - 1
                 
                 total_steps += 1
+        
         return True
     
     def translate(self, distance):
-        """Moves the robot in a straight line"""
+        """Moves the robot in a straight line for a given distance"""
         duration = distance/VELOCITY
         self.move(VELOCITY, 0, rospy.get_rostime(), duration)
     
@@ -206,7 +220,7 @@ class qMove:
         Turns the robot so that the new pose of the robot
         matches the target angle
         """
-        sign = "" # determines the direction of rotation
+        sign = "" # to determine the direction of rotation
         angular_distance = abs(target_angle - self.curr_angle)
         
         if target_angle > self.curr_angle:
@@ -223,18 +237,17 @@ class qMove:
         else:
             self.move(0, -ANG_VELOCITY, rospy.get_rostime(), duration)
         
-        self.curr_angle = target_angle # update the current position of the robot
+        self.curr_angle = target_angle # update the current orientation of the robot
 
 
     def is_close(self, curr_loc):
-        """checks if distance between current loc and target below threshold"""
+        """checks if distance between current and target loc below threshold"""
         distance = math.sqrt((curr_loc[0] - self.target_loc[0])**2 + (curr_loc[1] - self.target_loc[1])**2)
 
         if distance < 1.5:
             return True
         
         return False
-
 
 if __name__ == "__main__":
     rospy.init_node("movement")
