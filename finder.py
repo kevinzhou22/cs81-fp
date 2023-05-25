@@ -5,7 +5,6 @@
 # Date: May 23, 2023
 
 # Import of python modules.
-import sys
 import math
 
 # import of relevant libraries.
@@ -16,8 +15,10 @@ from nav_msgs.msg import OccupancyGrid, MapMetaData # pylint: disable=import-err
 
 import tf # pylint: disable=import-error
 import numpy as np
-import matplotlib.pyplot as plt
+
+# import of own code modules
 from lock_on import MovingObjectDetector
+from transform import Transform
 
 # Topic names
 DEFAULT_SCAN_TOPIC = 'robot_0/base_scan' 
@@ -43,11 +44,12 @@ LOOP_AND_PUBLISH_FREQUENCY = 1 #Hz.
 UPDATE_FREQUENCY = 0.5
 DETECT_FREQUENCY = 10
 
+# Useful constants
 TWO_PI = np.pi * 2
 
-# Detector from lock_on.py
 
 class Mode:
+    """Modes for the node"""
     BASELINE_INITIALIZATION = 0
     MOVEMENT_DETECTION = 1
 
@@ -79,7 +81,7 @@ class Finder():
         self._grid_pub = rospy.Publisher(grid_topic, OccupancyGrid, queue_size=1)
         self._anom_pub = rospy.Publisher('anom', OccupancyGrid, queue_size=1)
         self._laser_sub = rospy.Subscriber(scan_topic, LaserScan, self._laser_callback, queue_size=1)
-        self.transform_listener = tf.TransformListener()
+        self.transform = Transform()
 
         # frames
         self.scan_frame_id=scan_frame_id
@@ -95,16 +97,16 @@ class Finder():
         self.laser_min_error = laser_min_error
         self.laser_percent_increase_accuracy = laser_percent_increase_accuracy
         self.initialization_duration = rospy.Duration(initialization_duration)
+
         # state
-        # (free, occupied, unknown)
+        # each cell in grid has (free, occupied, unknown)
+        # indexed via [y, x]
         self.grid = np.tile(np.array([0, 0, 1], dtype=np.float64),(grid_height, grid_width, 1),)
-        self.anomalous_grid = np.zeros((grid_height, grid_width))
-        self.anomalous = set()
         self.last_update = rospy.get_rostime()
         self.last_detect = rospy.get_rostime()
         self.mode = Mode.BASELINE_INITIALIZATION
 
-        # for convenience, storing some grid variables that can be caluclated dynamically
+        # for convenience, storing some grid variables that can theoretetically be caluclated dynamically 
         scale_ratio = resolution
         t = tf.transformations.translation_matrix((grid_translation[0], grid_translation[1], 0))
         R = tf.transformations.euler_matrix(0, 0, grid_rotation)
@@ -119,6 +121,7 @@ class Finder():
         self.map_metadata = self._get_map_metadata(resolution, grid_width, grid_height, grid_translation, grid_rotation)
         self.points = []
 
+        # analyzes raw output of moving point detector to detect moving objects
         self.detector = MovingObjectDetector(eps=1.5, min_samples=4)
 
     
@@ -142,56 +145,48 @@ class Finder():
         map_metadata.origin = grid_origin
         return map_metadata
 
-    def _get_transformation_matrix(self, target, source, time=rospy.Time(0)):
-        """Gets the transformation matrix from target to source, looping until found"""
-        has_found_transformation = False
-        # it's possible the relevant transformation has not been published yet
-        # this just loops until the transformation is acquired
-        while not has_found_transformation:
-            try:
-                (trans, rot) = self.transform_listener.lookupTransform(
-                    target,
-                    source, 
-                    time
-                )
-                has_found_transformation = True
-            except (tf.LookupException, tf.ExtrapolationException):
-                rospy.sleep(0.1)
-                continue
-
-        t = tf.transformations.translation_matrix(trans)
-        R = tf.transformations.quaternion_matrix(rot)
-        transformation_matrix = np.matmul(t, R)
-        return transformation_matrix
-    def _transform_2d_point(self, transformation_matrix, point):
-        x, y = point
-        transformed_point = np.matmul(transformation_matrix, np.array([x, y, 0, 1], dtype='float64'))
-        return (transformed_point[0], transformed_point[1])
 
     def _get_coordinates_from_angle_and_distance(self, angle, distance):
+        """Converts lidar points to the lidar reference frame"""
         return (np.cos(angle) * distance, np.sin(angle) * distance)
     def _get_laser_accuracy(self, laser_distance):
+        """Returns the accuracy of the laser"""
         return self.laser_min_error + laser_distance * self.laser_percent_increase_accuracy
     def _get_perpendicular_ray_coeff(self, horizontal_component, ray_distance, angle_increment):
-        # we scale the std_dev with the sqrt of 1/2 the gap between rays
-        # this is to reflect that as we go farther, the exact middle of 
+        """
+        Returns a coefficient that scales down measurement confidence based on how far a point is
+        in the axis perpendicular to a ray
+        """
+        # we scale standard deviation with the sqrt to reflect that knowledge about points right between
+        # two rays diminishes as we go out
         std_dev = abs(np.sin(angle_increment / 2)) * np.sqrt(ray_distance)
+        # gaussian
         coeff = np.exp(- (horizontal_component ** 2) / (2 * (std_dev ** 2)))
         return coeff
 
     def _get_parallel_ray_coeffs(self, laser_distance, parallel_component):
+        """
+        Returns (free, occupied) interpreting what a given point with a given parallel component
+        to the ray implies for free / occupied. Note that free + occupied is usually less than 1, as 
+        there is also an unnown component
+        """
         x = parallel_component - laser_distance
         std_dev = self._get_laser_accuracy(laser_distance)
         # these equations manually tuned to resemble those of a 2017 research paper on the topic
+        # logistic function
         free = 1 / (1 + np.exp(30 * (x +  std_dev)))
+        # logistic function
         unknown = 1 / (1 + np.exp(-30 * (x - std_dev)))
         occupied = 1 - free - unknown
         return np.array([free, occupied])
 
     def _fuse_measurement_for_grid_point(self, grid_point, new):
-        # Dempster's rule of combination as described in 
-        # OCCUPANCY MODELLING FOR MOVING OBJECT DETECTION FROM LIDAR POINT CLOUDS: A COMPARATIVE STUDY
-        # by W. Xiao et al
+        """
+        Fuses a new measurement for a grid cell with a previous measurement using Dempster's Rule of
+        Combination as described by W. Xiao, et al., in
+        OCCUPANCY MODELLING FOR MOVING OBJECT DETECTION FROM LIDAR POINT CLOUDS: A COMPARATIVE STUDY
+        """
+
         old = self.grid[grid_point[1]][grid_point[0]]
         conflict = old[1] * new[0] + old[0] * new[1]
         conflict_coefficient = 1 / (1 - conflict)
@@ -203,10 +198,12 @@ class Finder():
         combined_measurement = combined_measurement / np.linalg.norm(combined_measurement)
         self.grid[grid_point[1]][grid_point[0]] = combined_measurement
     def _update_grid_for_point(self, sorted_observations, grid_to_laser, grid_point, angle_increment):
-        laser_point = self._transform_2d_point(grid_to_laser, grid_point)
+        """Given the observations made by the laser, update a speific grid point for the new measurements"""
+        laser_point = self.transform.transform_2d_point(grid_to_laser, grid_point)
         x, y = laser_point
         angle = (np.arctan2(y, x) + TWO_PI) % TWO_PI
         distance = np.linalg.norm(np.array(laser_point))
+        # find closest angle to grid point
         # finding closest angle methodology taken from https://stackoverflow.com/a/26026189
         angles = sorted_observations[:, 0]
         idx = np.searchsorted(angles, angle, side="left")
@@ -214,9 +211,11 @@ class Finder():
             idx = idx - 1
         closest_ray = sorted_observations[idx]
         angle_to_ray = angle - closest_ray[0]
+        # get perpendicular and parallel components of grid point vector from location of robot to the ray
+        # for use in sensor model calculations
         perp_component_to_ray = abs(np.sin(angle_to_ray)) * distance
         parallel_component_to_ray = abs(np.cos(angle_to_ray)) * distance
-        # heuristic to avoid doing unnecessary calculations 
+        # heuristics to avoid doing unnecessary calculations 
         if parallel_component_to_ray > closest_ray[1] + 5 * self._get_laser_accuracy(closest_ray[1]):
             parallel_coeffs = np.array([0, 0])
         elif parallel_component_to_ray < closest_ray[1] - 5 * self._get_laser_accuracy(closest_ray[1]):
@@ -230,8 +229,10 @@ class Finder():
 
     def _update_grid(self, laser_to_odom, odom_to_laser, observations, max_range, angle_increment):
         """Observations are ((laser x, laser y), obstacle)"""
-        odom_start = self._transform_2d_point(laser_to_odom, (0, 0))
-        grid_start = self._transform_2d_point(self.odom_to_grid, odom_start)
+        odom_start = self.transform.transform_2d_point(laser_to_odom, (0, 0))
+        grid_start = self.transform.transform_2d_point(self.odom_to_grid, odom_start)
+        # find the max distance laser scan to avoid updating grid cells that cannot possibly have
+        # new information
         max_observed_range = 0
         for observation in observations:
             if observation[1] == max_range:
@@ -242,12 +243,14 @@ class Finder():
         # (angle, distance per laser, was_obstacle_found)
         sorted_observations = observations[observations[:, 0].argsort()]
         # add "first" angle to end and "last" angle to front to reflect modular equivalence of angles
+        # so that binary search will work correctly later
         last_obs = np.copy(sorted_observations[-1])
         last_obs[0] -= TWO_PI
         first_obs = np.copy(sorted_observations[0])
         first_obs[0] += TWO_PI
         sorted_observations = np.insert(sorted_observations, 0, last_obs, axis=0)
         sorted_observations = np.append(sorted_observations, np.array([first_obs]), axis=0)
+        # bounding box for updates
         box_x_start = int(round(max(0, grid_start[0] - max_observed_range)))
         box_x_end = int(round(min(self.grid.shape[1] - 1, grid_start[0] + max_observed_range)))
         box_y_start = int(round(max(0, grid_start[1] - max_observed_range)))
@@ -257,15 +260,19 @@ class Finder():
                 self._update_grid_for_point(sorted_observations, grid_to_laser, (x, y), angle_increment)
 
     def _extract_occupied_anomalies(self, laser_to_odom, observations):
-            self.anomalous_grid = np.zeros((self.grid_height, self.grid_width))
+            """
+            Analyzes laser observartions for any measurements that conflict
+            with the existing grid in a way that implies a moving object
+            """
             anomalous_odom_points = []
             for observation in observations:
                 angle, distance, was_obstacle_found = observation
                 if not was_obstacle_found:
                     continue
                 laser_coords = self._get_coordinates_from_angle_and_distance(angle, distance)
-                odom_coords = self._transform_2d_point(laser_to_odom, laser_coords)
-                grid_coords = np.array(self._transform_2d_point(self.odom_to_grid, odom_coords))
+                odom_coords = self.transform.transform_2d_point(laser_to_odom, laser_coords)
+                grid_coords = np.array(self.transform.transform_2d_point(self.odom_to_grid, odom_coords))
+                # bilinear inrterpolation of nearest grid points
                 upper = np.ceil(grid_coords).astype(int)
                 lower = np.floor(grid_coords).astype(int)
                 upper_left = self.grid[upper[1], lower[0]]
@@ -287,7 +294,7 @@ class Finder():
     def _laser_callback(self, msg):
         """Processing of laser message."""
         time = msg.header.stamp
-        laser_to_odom = self._get_transformation_matrix(self.odom_frame_id, self.scan_frame_id, time)
+        laser_to_odom = self.transform.get_transformation_matrix(self.odom_frame_id, self.scan_frame_id, time)
         odom_to_laser = np.linalg.inv(laser_to_odom)
         time = rospy.get_rostime()
         should_update = time - self.last_update >= self.update_interval
@@ -303,10 +310,6 @@ class Finder():
                 continue
             is_end_occupied = True
             if dist == msg.range_max or dist == msg.range_min:
-                # we assume msg.range_min means nothin was found, so
-                # we make everything along that line free
-                dist = msg.range_max
-                # assume no object found
                 is_end_occupied = False
 
             observations[i] = np.array([(angle + TWO_PI) % TWO_PI, dist, is_end_occupied])
@@ -343,15 +346,12 @@ class Finder():
             grid_msg.header.stamp = rospy.get_rostime()
             grid_msg.header.frame_id = self.odom_frame_id
             grid_msg.info = self.map_metadata
-            grid_msg.data = np.rint(self.grid[:,:, 2] * 100).astype(int).flatten()
+            grid_msg.data = np.rint(self.grid[:,:, 0] * 100).astype(int).flatten()
             self._grid_pub.publish(grid_msg)
-            # grid_msg.data = self.anomalous_grid.flatten()
-            # self._anom_pub.publish(grid_msg)
             rate.sleep()
 
 def main():
     """Main function."""
-    np.set_printoptions(threshold=sys.maxsize)
     # 1st. initialization of node.
     rospy.init_node("finder")
 
