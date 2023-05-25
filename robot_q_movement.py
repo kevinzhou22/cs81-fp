@@ -5,19 +5,25 @@
 import numpy as np
 import q_learning
 import math
+import random
 
 # rospy libraries
 import rospy
 from geometry_msgs.msg import Twist, PoseStamped # message type
 from nav_msgs.msg import OccupancyGrid
+from sensor_msgs.msg import LaserScan # message type for scan pylint: disable=import-error
 import tf
 
 # CONSTANTS
 # Frequency at which the loop operates
 VELOCITY = 0.5 #m/s
 ANG_VELOCITY = math.pi/4.0 #rad/s
-DEFAULT_SCAN_TOPIC = 'base_scan'
+DEFAULT_SCAN_TOPIC = 'robot_0/base_scan'
 DEFAULT_OBJ_TOPIC = 'stalked'
+
+MIN_SCAN_ANGLE_RAD = -40.0 / 180 * math.pi
+MAX_SCAN_ANGLE_RAD = +40.0 / 180 * math.pi
+MIN_THRESHOLD_DISTANCE = 0.5 # m
 
 class Grid:
     """Initializes a Grid class which stores height, width, resolution data."""
@@ -27,8 +33,10 @@ class Grid:
         self.resolution = resolution
 
 class qMove:
-    def __init__(self):
+    def __init__(self, scan_angle=[MIN_SCAN_ANGLE_RAD, MAX_SCAN_ANGLE_RAD], min_threshold_distance=MIN_THRESHOLD_DISTANCE):
         """Initialization."""
+        # Setting up subscriber receiving messages from the laser.
+        self._laser_sub = rospy.Subscriber(DEFAULT_SCAN_TOPIC, LaserScan, self._laser_callback, queue_size=1)
         self.sub = rospy.Subscriber("map", OccupancyGrid, self.map_callback, queue_size=1)
         self.publisher = rospy.Publisher("/robot_0/cmd_vel", Twist, queue_size=1)
         self.vel_msg = Twist()
@@ -48,6 +56,9 @@ class qMove:
                                     [0, 0, 0, 1]])
         self.transform_listener = tf.TransformListener()
         self.done_travelling = False
+        self._close_obstacle = False # Flag variable that is true if there is a close obstacle.
+        self.scan_angle = scan_angle
+        self.min_threshold_distance = min_threshold_distance
     
     def _obj_callback(self, msg):
         self.done_travelling = False
@@ -67,11 +78,39 @@ class qMove:
         stalker_map = self._transform_2d_point(self.map_T_odom, ((msg.pose.position.x, msg.pose.position.y)))
         self.target_loc = (int(round(stalker_map[0])), int(round(stalker_map[1])))
 
+        if self._close_obstacle == True:
+            print("Detected obstacle; rotating randomly")
+            rand_angle = random.uniform(-math.pi, math.pi)
+            start_time = rospy.get_rostime()
+            total_time = abs(rand_angle / ANG_VELOCITY)
+            # rotating robot at angular velocity for calculated amount fo time
+            if (rand_angle > 0):
+                self.move(0, ANG_VELOCITY, start_time, total_time)
+            else:
+                self.move(0, -ANG_VELOCITY, start_time, total_time)
+            self._close_obstacle = False
+
         while (self.done_travelling != True):
             print("Targeted Location Locked!")
             print(self.target_loc)
             self.get_table()
             self.done_travelling = self.follow_policy()
+
+    def _laser_callback(self, msg):
+        if not self._close_obstacle:
+            min_index = max(int(np.floor((self.scan_angle[0] - msg.angle_min) / msg.angle_increment)), 0)
+            max_index = min(int(np.ceil((self.scan_angle[1] - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
+
+            # finds the minimum range value in ranges between min_index and max_index
+            min_range_val = float('inf')
+            for i in range(len(msg.ranges)):
+                if i > min_index and i < max_index:
+                    if msg.ranges[i] < min_range_val:
+                        min_range_val = msg.ranges[i]
+
+            # determines whether obstacle is close enough to robot
+            if (min_range_val < self.min_threshold_distance):
+                self._close_obstacle = True
 
     
     def _get_transformation_matrix(self, target, source, time=rospy.Time(0)):
@@ -194,6 +233,7 @@ class qMove:
                     self.curr_x = self.curr_x - 1
                 
                 total_steps += 1
+        
         return True
     
     def translate(self, distance):
