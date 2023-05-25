@@ -286,7 +286,6 @@ class Finder():
                 
     def _laser_callback(self, msg):
         """Processing of laser message."""
-        print('laser')
         time = msg.header.stamp
         laser_to_odom = self._get_transformation_matrix(self.odom_frame_id, self.scan_frame_id, time)
         odom_to_laser = np.linalg.inv(laser_to_odom)
@@ -313,11 +312,7 @@ class Finder():
             observations[i] = np.array([(angle + TWO_PI) % TWO_PI, dist, is_end_occupied])
         if self.mode == Mode.MOVEMENT_DETECTION and should_detect:
             anomalies = self._extract_occupied_anomalies(laser_to_odom, observations)
-            print(anomalies)
-            centroid1 = self.detector.detect_object(anomalies)
-            # should print the (x, y) coordinates of the center of the object
-            print("Object location:", centroid1, "\n")
-            self.last_detect = time
+            self.detector.detect_object(anomalies)
         if should_update:
             self._update_grid(laser_to_odom, odom_to_laser, observations, msg.range_max, msg.angle_increment)
             self.last_update = time
