@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+# Author: Amit Das
+
 import math
 import random
 

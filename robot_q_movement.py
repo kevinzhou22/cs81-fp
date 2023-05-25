@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# Author: Amit Das
 
 # python/class libraries
 import numpy as np
@@ -229,7 +230,7 @@ class qMove:
         """checks if distance between current loc and target below threshold"""
         distance = math.sqrt((curr_loc[0] - self.target_loc[0])**2 + (curr_loc[1] - self.target_loc[1])**2)
 
-        if distance < 0.2:
+        if distance < 1.5:
             return True
         
         return False

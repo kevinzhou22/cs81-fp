@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# Author: Amel Docena
 
 """
 References:
