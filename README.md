@@ -14,10 +14,12 @@ It consists of two main components:
 objects
 * lock-on.py: analyzes the output of `finder.py` and determines the object location, orientation,
 and linear speed
-* transform.ppy: contains utility functions for conducting transformations between coordinate frames
+* transform.py: contains utility functions for conducting transformations between coordinate frames
 and extracting information about relative translation and orientation
-*
-*
+* q_learning.py: implements q-learning. That is, includes functions to update q-table, calculate rewards,
+start the training process and return the best policy as a result of training
+* robot_q_movement.py: processes a point published by `finder.py`; moves the robot to that point
+using Q-learning
 *
 
 ## Setup and Execution
@@ -33,6 +35,11 @@ python finder.py
 To move the other robot:
 ```
 python random_walk.py
+```
+
+To run the main robot:
+```
+python robot_q_movement.py
 ```
 
 #
