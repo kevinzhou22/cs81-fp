@@ -13,7 +13,7 @@ import tf
 
 # CONSTANTS
 # Frequency at which the loop operates
-VELOCITY = 0.3 #m/s
+VELOCITY = 0.5 #m/s
 ANG_VELOCITY = math.pi/4.0 #rad/s
 DEFAULT_SCAN_TOPIC = 'base_scan'
 DEFAULT_OBJ_TOPIC = 'stalked'
@@ -160,8 +160,10 @@ class qMove:
     
     def follow_policy(self):
         """Controls the robot's movements to match actions in best policy"""
+        total_steps = 0
         if (self.q_policy != None):
-            while (self.is_close((self.curr_x, self.curr_y)) == False):
+            while (self.is_close((self.curr_x, self.curr_y)) == False and total_steps < 2):
+                
                 # retreive best action at current position
                 action = self.q_policy[(self.curr_x, self.curr_y)]
                 print(action)
@@ -189,6 +191,8 @@ class qMove:
                     self.rotate_abs(-math.pi)
                     self.translate(1)
                     self.curr_x = self.curr_x - 1
+                
+                total_steps += 1
         return True
     
     def translate(self, distance):
