@@ -160,8 +160,12 @@ class qMove:
     
     def follow_policy(self):
         """Controls the robot's movements to match actions in best policy"""
+        total_steps = 0
         if (self.q_policy != None):
             while (self.is_close((self.curr_x, self.curr_y)) == False):
+                if total_steps > 2:
+                    break
+                
                 # retreive best action at current position
                 action = self.q_policy[(self.curr_x, self.curr_y)]
                 print(action)
@@ -189,6 +193,8 @@ class qMove:
                     self.rotate_abs(-math.pi)
                     self.translate(1)
                     self.curr_x = self.curr_x - 1
+                
+                total_steps += 1
         return True
     
     def translate(self, distance):
