@@ -23,22 +23,30 @@ using Q-learning.
 
 ## Setup and Execution
 (in addition to tf, get numpy and scikit-learn)
-Set up world:
+Setup:
 ```
-```
-To run the motion detector:
-```
-python finder.py
+sudo apt-get install python-sklearn python-sklearn-lib python-sklearn-doc
+sudo apt-get install python-rosdep
+sudo rosdep init
+rosdep update
 ```
 
+Then, in separate terminals, execute each of the commands:
+```
+roscore
+```
+```
+
+rosrun stage_ros stageros PA1.world
+```
+```
+python finder.py # motion detection
+```
 To move the other robot:
 ```
-python random_walk.py
+python random_walk.py # moving the followed robot
 ```
-
 To run the main robot:
 ```
-python robot_q_movement.py
+python robot_q_movement.py # executing the discrete learning algorithm for following
 ```
-
-#
