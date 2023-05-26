@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+# Author: Amit Das
+
 import math
 import random
 
@@ -31,6 +33,7 @@ class QLearning:
         self.height = height
         self.width = width
         self.epsilon = 1
+        self.is_close_to_robot = False
         
         # initializing q_table with states, actions, and value of 0
         for i in range(width):
@@ -87,12 +90,11 @@ class QLearning:
         Returns:
             float: reward at provided state
         """
-        # bonus = 0
-        # if point[0] > 8 or point[0] < 2:
-        #     if point[1] > 8 or point[1] < 2:
-        #         bonus = 5
+        penalty = 0
+        if self.is_close_to_robot:
+            penalty = -20
 
-        return -math.sqrt((self.target[0] - point[0])**2 + (self.target[1] - point[1])**2)
+        return -math.sqrt((self.target[0] - point[0])**2 + (self.target[1] - point[1])**2) + penalty
     
     def training(self, iterations = 5):
         """
@@ -105,6 +107,7 @@ class QLearning:
             for key in self.q_table.keys():
                 self.update_q_table(key)
             self.get_best_policy(self.q_table)
+
     
     def get_best_policy(self, q_table):
         """

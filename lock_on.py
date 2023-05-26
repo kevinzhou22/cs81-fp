@@ -8,6 +8,7 @@ from sklearn.cluster import DBSCAN
 import rospy # module for ROS APIs pylint: disable=import-error
 from geometry_msgs.msg import PoseStamped # message type for cmd_vel pylint: disable=import-error
 from std_msgs.msg import Float32
+import tf
 
 DEFAULT_OBJ_TOPIC = 'stalked' 
 DEFAULT_OBJ_VEL_TOPIC = 'stalked_vel'
@@ -43,7 +44,6 @@ class MovingObjectDetector:
 
     def detect_object(self, points):
         """Detects the object and publishes its pose and linear velocity to the stalked topic after detect_frequency number of calls to this function."""
-        print('called')
         self._call_count += 1
         # proceed only if detect_object() has been called 10 times
         if self._call_count % self.detect_frequency != 0:
@@ -61,7 +61,6 @@ class MovingObjectDetector:
 
         # filter out clusters that are too small
         clusters = [cluster for cluster in clusters if len(cluster) >= self.min_samples]
-        print("clusters:\n", clusters)
 
         if not clusters:
             return None
@@ -78,10 +77,13 @@ class MovingObjectDetector:
             self._last_times.pop(0)
         self._last_centroids.append(centroid)
         self._last_times.append(rospy.get_rostime().to_sec())
+        if len(self._last_centroids) < 3:
+            return
 
+        print('centroids list', self._last_centroids)
         vector_1 = self._last_centroids[1] - self._last_centroids[0]
         vector_2 = self._last_centroids[2] - self._last_centroids[1]
-        theta = np.arctan2(vector_2[1] - vector_1[1], vector_2[0] - vector_1[0])
+        theta = sum((np.arctan2(vector_2[1], vector_2[0]), np.arctan2(vector_1[1], vector_1[0]))) / 2
 
         # publish the velocity of the object based on the last 3 centroids
         if len(self._last_centroids) == 3:
@@ -93,8 +95,14 @@ class MovingObjectDetector:
         pose.pose.position.x = centroid[0]
         pose.pose.position.y = centroid[1]
         pose.pose.orientation.z = theta
+        x, y, z, w = tf.transformations.quaternion_from_euler(0, 0, theta)
+        print('angle: ', np.degrees(theta))
+        pose.pose.orientation.x = x
+        pose.pose.orientation.y = y
+        pose.pose.orientation.z = z
+        pose.pose.orientation.w = w
+
         pose.header.stamp = rospy.get_rostime()
         pose.header.frame_id = self.odom_frame_id
         self._obj_pub.publish(pose)
 
-        return centroid
