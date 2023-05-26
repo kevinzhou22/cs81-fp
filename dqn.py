@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 """
+Author: Amel Docena
+
 References:
 1. An Overview of the Action Space for Deep Reinforcement Learning., ACML
 2. Deep Learning Reinforcement Tutorial: Deep Q Network (DQN), Aleksander Haber
@@ -17,35 +19,13 @@ from tensorflow.keras.losses import mean_squared_error
 
 
 """
-Goal: Make this DQN run in ROS
-Given: Data -> States
-
-State (2 to 4): relative pose of robot to object, angle orientation of robot toward the object, PO: orientation of object, linear velocity of object
-Action (7): north, northeast, northwest, south, southeast, southwest, stay put
-Reward: 
-
-Network: (10x40) (40x20) (20x10)
-
-"""
-
-"""
-Create methods: translate simulation in ROS.
-
-step() - Updates an environment with actions returning the next agent observation, the reward for taking that actions, if the environment has terminated or truncated due to the latest action and information from the environment about the step, i.e. metrics, debug info.
-TODO methods:
-1. Update environment with actions returning next agent obs
-2. Reward for taking that action
-3. PO: if environment has terminated/truncated 
-
-reset() - Resets the environment to an initial state, required before calling step. Returns the first agent observation for an episode and information, i.e. metrics, debug info.
-TODO methods:
-1. Rese
+Work in progress
 """
 
 class DeepQLearning:
     def __init__(self, env, gamma, epsilon, numberEpisodes):
 
-        self.env = env
+        self.env = env #TODO: ROS environment
         self.gamma = gamma
         self.epsilon = epsilon
         self.numberEpisodes = numberEpisodes

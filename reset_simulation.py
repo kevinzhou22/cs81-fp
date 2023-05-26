@@ -5,7 +5,6 @@
 
 """
 Credits to Kizito Masaba for sharing sample codes for killing nodes
-TODO: Where are the codes to reset the simulation though?
 
 """
 
@@ -50,4 +49,5 @@ def start_simulation(launcher_args):
     time.sleep(10)
 
 def restart_simulation():
+    #TODO
     pass
