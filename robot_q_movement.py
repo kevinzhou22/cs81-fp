@@ -72,6 +72,7 @@ class qMove:
         # information of laser scan/object detection
         self.scan_angle = scan_angle
         self.min_threshold_distance = min_threshold_distance
+        self.close_to_robot = False
 
     
     def _obj_callback(self, msg):
@@ -158,6 +159,7 @@ class qMove:
         if self.map != None:
             # start the q-learning
             q_model = q_learning.QLearning(width=self.width, height=self.height, start_loc=(self.curr_x, self.curr_y), target_loc=self.target_loc)
+            q_model.is_close_to_robot = self.close_to_robot
             q_model.training(10) # training for 10 iterations
             q_model.get_best_policy(q_model.q_table)
             self.q_policy = q_model.best_policy # setting the best policy
@@ -244,7 +246,8 @@ class qMove:
         """checks if distance between current and target loc below threshold"""
         distance = math.sqrt((curr_loc[0] - self.target_loc[0])**2 + (curr_loc[1] - self.target_loc[1])**2)
 
-        if distance < 1.5:
+        if distance < 0.25:
+            self.close_to_robot = True
             return True
         
         return False
