@@ -246,7 +246,7 @@ class qMove:
         """checks if distance between current and target loc below threshold"""
         distance = math.sqrt((curr_loc[0] - self.target_loc[0])**2 + (curr_loc[1] - self.target_loc[1])**2)
 
-        if distance < 0.25:
+        if distance < 1.1:
             self.close_to_robot = True
             return True
         
