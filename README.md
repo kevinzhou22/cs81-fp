@@ -20,7 +20,9 @@ and extracting information about relative translation and orientation
 start the training process and return the best policy as a result of training
 * robot_q_movement.py: processes a point published by `finder.py`; moves the robot to that point
 using Q-learning
-*
+* generate_train_data.py: generates train data for experience replay during DQN training
+* reset_simulation.py: resets the ROS world simulation
+* dqn.py: DQN network
 
 ## Setup and Execution
 (in addition to tf, get numpy and scikit-learn?)
