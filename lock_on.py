@@ -8,7 +8,8 @@ from sklearn.cluster import DBSCAN
 import rospy # module for ROS APIs pylint: disable=import-error
 from geometry_msgs.msg import PoseStamped # message type for cmd_vel pylint: disable=import-error
 from std_msgs.msg import Float32
-import tf
+
+import tf # module for transformations
 
 DEFAULT_OBJ_TOPIC = 'stalked' 
 DEFAULT_OBJ_VEL_TOPIC = 'stalked_vel'
@@ -91,6 +92,7 @@ class MovingObjectDetector:
             average_velocity = np.mean(velocities)
             self._vel_pub.publish(Float32(average_velocity))
 
+        # publish the pose of the object
         pose = PoseStamped()
         pose.pose.position.x = centroid[0]
         pose.pose.position.y = centroid[1]
