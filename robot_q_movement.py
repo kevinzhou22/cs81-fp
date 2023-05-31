@@ -20,8 +20,8 @@ VELOCITY = 0.5 #m/s
 ANG_VELOCITY = math.pi/4.0 #rad/s
 DEFAULT_SCAN_TOPIC = 'robot_0/base_scan'
 DEFAULT_OBJ_TOPIC = 'stalked'
-MIN_SCAN_ANGLE_RAD = -40.0 / 180 * math.pi #rad
-MAX_SCAN_ANGLE_RAD = +40.0 / 180 * math.pi #rad
+MIN_SCAN_ANGLE_RAD = -5.0 / 180 * math.pi #rad
+MAX_SCAN_ANGLE_RAD = +5.0 / 180 * math.pi #rad
 MIN_THRESHOLD_DISTANCE = 0.5 #m
 
 class Grid:
@@ -73,6 +73,7 @@ class qMove:
         self.scan_angle = scan_angle
         self.min_threshold_distance = min_threshold_distance
         self.close_to_robot = False
+        self.energy = 20
 
     
     def _obj_callback(self, msg):
@@ -97,21 +98,6 @@ class qMove:
         # position of stalker in map
         stalker_map = self.transform.transform_2d_point(self.map_T_odom, ((msg.pose.position.x, msg.pose.position.y)))
         self.target_loc = (int(round(stalker_map[0])), int(round(stalker_map[1])))
-
-        # if too close to obstacle, robot rotates
-        if self._close_obstacle == True:
-            print("Detected obstacle! Rotating randomly")
-            rand_angle = random.uniform(-math.pi, math.pi)
-            start_time = rospy.get_rostime()
-            total_time = abs(rand_angle / ANG_VELOCITY)
-            
-            # rotating robot at angular velocity for calculated amount fo time
-            if (rand_angle > 0):
-                self.move(0, ANG_VELOCITY, start_time, total_time)
-            else:
-                self.move(0, -ANG_VELOCITY, start_time, total_time)
-            
-            self._close_obstacle = False
 
         while (self.done_travelling != True):
             print("Targeted Location Locked!")
@@ -139,6 +125,8 @@ class qMove:
             # determines whether obstacle is close enough to robot
             if (min_range_val < self.min_threshold_distance):
                 self._close_obstacle = True
+            else:
+                self.close_to_obstacle = False
     
     def map_callback(self, msg):
         """Initializes map as Grid object; calls method to get best policy"""
@@ -160,7 +148,7 @@ class qMove:
             # start the q-learning
             q_model = q_learning.QLearning(width=self.width, height=self.height, start_loc=(self.curr_x, self.curr_y), target_loc=self.target_loc)
             q_model.is_close_to_robot = self.close_to_robot
-            q_model.training(10) # training for 10 iterations
+            q_model.training(50) # training for 10 iterations
             q_model.get_best_policy(q_model.q_table)
             self.q_policy = q_model.best_policy # setting the best policy
         
@@ -173,16 +161,36 @@ class qMove:
                 break
             self.publisher.publish(self.vel_msg)
             self.rate.sleep()
+        self.vel_msg.linear.x = 0
+        self.vel_msg.angular.z = 0
+        self.publisher.publish(self.vel_msg)
     
     def follow_policy(self):
         """Controls the robot's movements to match actions in best policy"""
         total_steps = 0
         if (self.q_policy != None):
-            while (self.is_close((self.curr_x, self.curr_y)) == False and total_steps < 2):
+            while (self.is_close((self.curr_x, self.curr_y)) == False and total_steps < 1):
                 
                 # retreive best action at current position
-                action = self.q_policy[(self.curr_x, self.curr_y)]
+                action = self.q_policy[(self.curr_x, self.curr_y, self.energy)]
                 print(action)
+                print("Current Energy Level: " + str(self.energy))
+
+                # if too close to obstacle, robot rotates
+                if self._close_obstacle == True:
+                    self.energy = self.energy - 1
+                    print("Detected obstacle! Rotating randomly")
+                    rand_angle = random.uniform(-math.pi, math.pi)
+                    start_time = rospy.get_rostime()
+                    total_time = abs(rand_angle / ANG_VELOCITY)
+            
+                    # rotating robot at angular velocity for calculated amount fo time
+                    if (rand_angle > 0):
+                        self.move(0, ANG_VELOCITY, start_time, total_time)
+                    else:
+                        self.move(0, -ANG_VELOCITY, start_time, total_time)
+                    
+                    return True
 
                 # move upwards
                 if action == 'up': 
@@ -208,6 +216,11 @@ class qMove:
                     self.translate(1)
                     self.curr_x = self.curr_x - 1
                 
+                if self.curr_x >= 7 and self.curr_y >= 7:
+                    self.energy = 20
+                else:
+                    self.energy = self.energy - 1
+
                 total_steps += 1
         
         return True
