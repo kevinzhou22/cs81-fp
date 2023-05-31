@@ -4,9 +4,11 @@
 
 import math
 import random
+import matplotlib.pyplot as plt
 
 DECAY_RATE = 0.5
 MAX_ENERGY = 20
+ERRORS = []
 
 class QLearning:
     """
@@ -101,7 +103,7 @@ class QLearning:
             float: reward at provided state
         """
 
-        max_reward = 250
+        max_reward = 1000
 
         # robot too close to object
         proximity_penalty = 0
@@ -111,9 +113,7 @@ class QLearning:
         distance_to_object = math.sqrt((self.target[0] - point[0])**2 + (self.target[1] - point[1])**2)
         following_reward = max_reward/(1 + distance_to_object)
         
-        low_energy_penalty = 0
-        if curr_energy < 5:
-            low_energy_penalty = -500
+        low_energy_penalty = -1500 * math.sqrt((1 - (float(curr_energy) / 20)))
 
         edge_penalty = 0
         if point[0] >= 9 or point[1] >= 9:
@@ -135,6 +135,7 @@ class QLearning:
             self.get_best_policy(self.q_table)
             new_total = sum(self.q_table.values())
 
+            ERRORS.append(abs(new_total - prev_total))
             if abs(new_total - prev_total) < 100:
                 print((new_total), (prev_total))
                 print("Converges during Iteration " + str(i))
@@ -177,4 +178,15 @@ if __name__ == "__main__":
     q_learning = QLearning(20, 20, (0, 0), (5, 5))
     q_learning.training(200)
     q_learning.get_best_policy(q_learning.q_table)
+    plt.plot([i for i in range(len(ERRORS))], ERRORS, color='green', linewidth=2, marker='o', markersize=4)
+    plt.ylabel("Error")
+    plt.xlabel("Iterations")
+    plt.title("Error over Iterations")
+    # Customizing the grid
+    plt.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+
+    # Customizing the axes
+    plt.axhline(y=0, color='black', linewidth=1)
+    plt.axvline(x=0, color='black', linewidth=1)
+    plt.show()
     # print(q_learning.best_policy)

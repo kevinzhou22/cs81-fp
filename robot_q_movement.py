@@ -16,7 +16,7 @@ from nav_msgs.msg import OccupancyGrid
 from sensor_msgs.msg import LaserScan
 
 # CONSTANTS
-VELOCITY = 0.2 #m/s
+VELOCITY = 0.5 #m/s
 ANG_VELOCITY = math.pi/4.0 #rad/s
 DEFAULT_SCAN_TOPIC = 'robot_0/base_scan'
 DEFAULT_OBJ_TOPIC = 'stalked'
