@@ -148,7 +148,7 @@ class qMove:
             # start the q-learning
             q_model = q_learning.QLearning(width=self.width, height=self.height, start_loc=(self.curr_x, self.curr_y), target_loc=self.target_loc)
             q_model.is_close_to_robot = self.close_to_robot
-            q_model.training(50) # training for 10 iterations
+            q_model.training(50) # training for 50 iterations
             q_model.get_best_policy(q_model.q_table)
             self.q_policy = q_model.best_policy # setting the best policy
         
@@ -216,6 +216,7 @@ class qMove:
                     self.translate(1)
                     self.curr_x = self.curr_x - 1
                 
+                # adjusting energy state
                 if self.curr_x >= 7 and self.curr_y >= 7:
                     self.energy = 20
                 else:
@@ -227,6 +228,7 @@ class qMove:
     
     def translate(self, distance):
         """Moves the robot in a straight line for a given distance"""
+        
         duration = distance/VELOCITY
         self.move(VELOCITY, 0, rospy.get_rostime(), duration)
     
@@ -235,6 +237,7 @@ class qMove:
         Turns the robot so that the new pose of the robot
         matches the target angle
         """
+        
         sign = "" # to determine the direction of rotation
         angular_distance = abs(target_angle - self.curr_angle)
         
@@ -257,6 +260,7 @@ class qMove:
 
     def is_close(self, curr_loc):
         """checks if distance between current and target loc below threshold"""
+        
         distance = math.sqrt((curr_loc[0] - self.target_loc[0])**2 + (curr_loc[1] - self.target_loc[1])**2)
 
         if distance < 1.1:
