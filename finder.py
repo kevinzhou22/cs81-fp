@@ -222,6 +222,10 @@ class Finder():
             parallel_coeffs = np.array([1, 0])
         else:
             parallel_coeffs = self._get_parallel_ray_coeffs(closest_ray[1], parallel_component_to_ray)
+            # elimiate occupied component if no obstacle hit
+            if not closest_ray[2]:
+                parallel_coeffs[1] = 0
+                parallel_coeffs = parallel_coeffs / np.linalg.norm(parallel_coeffs)
         perp_coeff = self._get_perpendicular_ray_coeff(perp_component_to_ray, closest_ray[1], angle_increment)
         free, occupied = parallel_coeffs * perp_coeff
         new_measurement = np.array([free, occupied, 1 - free - occupied])
