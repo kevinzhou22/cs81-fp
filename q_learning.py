@@ -29,8 +29,8 @@ class QLearning:
 
     def __init__(self, width, height, start_loc, target_loc):
         self.target = target_loc
-        self.alpha = 0.3
-        self.gamma = 0.4
+        self.alpha = 0.5
+        self.gamma = 0.1
         self.q_table = {}
         self.best_policy = {}
         self.height = height
@@ -113,7 +113,7 @@ class QLearning:
         distance_to_object = math.sqrt((self.target[0] - point[0])**2 + (self.target[1] - point[1])**2)
         following_reward = max_reward/(1 + distance_to_object)
         
-        low_energy_penalty = -1500 * math.sqrt((1 - (float(curr_energy) / 20)))
+        low_energy_penalty = -2500 * math.sqrt((1 - (float(curr_energy) / 20)))
 
         edge_penalty = 0 # too close to edge of grid
         if point[0] >= 9 or point[1] >= 9 or point[0] <= 1 or point[1] <= 1:

@@ -75,6 +75,8 @@ class qMove:
         self.close_to_robot = False
         self.energy = 20
 
+        self.error_history = open("errors.txt", "a")
+
     
     def _obj_callback(self, msg):
         """
@@ -148,7 +150,7 @@ class qMove:
             # start the q-learning
             q_model = q_learning.QLearning(width=self.width, height=self.height, start_loc=(self.curr_x, self.curr_y), target_loc=self.target_loc)
             q_model.is_close_to_robot = self.close_to_robot
-            q_model.training(50) # training for 50 iterations
+            q_model.training(25) # training for 25 iterations
             q_model.get_best_policy(q_model.q_table)
             self.q_policy = q_model.best_policy # setting the best policy
         
@@ -169,7 +171,7 @@ class qMove:
         """Controls the robot's movements to match actions in best policy"""
         total_steps = 0
         if (self.q_policy != None):
-            while (self.is_close((self.curr_x, self.curr_y)) == False and total_steps < 1):
+            while (self.is_close((self.curr_x, self.curr_y)) == False and total_steps < 2):
                 
                 # retreive best action at current position
                 action = self.q_policy[(self.curr_x, self.curr_y, self.energy)]
@@ -262,6 +264,7 @@ class qMove:
         """checks if distance between current and target loc below threshold"""
         
         distance = math.sqrt((curr_loc[0] - self.target_loc[0])**2 + (curr_loc[1] - self.target_loc[1])**2)
+        self.error_history.write(str(distance) + "\n")
 
         if distance < 1.1:
             self.close_to_robot = True
