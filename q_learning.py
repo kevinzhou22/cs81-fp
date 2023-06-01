@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 DECAY_RATE = 0.5
 MAX_ENERGY = 20
-ERRORS = []
+ERRORS = [] # keep track of errors after each training iteration
 
 class QLearning:
     """
@@ -103,7 +103,7 @@ class QLearning:
             float: reward at provided state
         """
 
-        max_reward = 1000
+        max_reward = 1000 # reward for closely following object
 
         # robot too close to object
         proximity_penalty = 0
@@ -115,8 +115,8 @@ class QLearning:
         
         low_energy_penalty = -1500 * math.sqrt((1 - (float(curr_energy) / 20)))
 
-        edge_penalty = 0
-        if point[0] >= 9 or point[1] >= 9:
+        edge_penalty = 0 # too close to edge of grid
+        if point[0] >= 9 or point[1] >= 9 or point[0] <= 1 or point[1] <= 1:
             edge_penalty = -1000
 
         return following_reward + proximity_penalty + low_energy_penalty + edge_penalty
@@ -128,6 +128,7 @@ class QLearning:
         Args:
             iterations (int): number of iterations to train
         """
+        
         for i in range(iterations):
             prev_total = sum(self.q_table.values())
             for key in self.q_table.keys():
@@ -139,7 +140,7 @@ class QLearning:
             if abs(new_total - prev_total) < 100:
                 print((new_total), (prev_total))
                 print("Converges during Iteration " + str(i))
-                break
+                break # stops training after convergence
 
     
     def get_best_policy(self, q_table):
@@ -149,6 +150,7 @@ class QLearning:
         Args:
             q_table (dict): The Q-table after training
         """
+
         all_states = set()
         for key in q_table.keys():
             all_states.add((key[0], key[1], key[2]))
@@ -174,19 +176,21 @@ class QLearning:
                 self.best_policy[(state[0], state[1], state[2])] = pos_actions[random_index]
 
 if __name__ == "__main__":
-    
     q_learning = QLearning(20, 20, (0, 0), (5, 5))
     q_learning.training(200)
     q_learning.get_best_policy(q_learning.q_table)
+
+    # Plotting the error over iterations graph
     plt.plot([i for i in range(len(ERRORS))], ERRORS, color='green', linewidth=2, marker='o', markersize=4)
+
+    # Setting up the grid
+    plt.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
     plt.ylabel("Error")
     plt.xlabel("Iterations")
     plt.title("Error over Iterations")
-    # Customizing the grid
-    plt.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
 
-    # Customizing the axes
+    # Setting up the axes
     plt.axhline(y=0, color='black', linewidth=1)
     plt.axvline(x=0, color='black', linewidth=1)
     plt.show()
-    # print(q_learning.best_policy)
+
