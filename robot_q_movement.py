@@ -68,12 +68,13 @@ class qMove:
         # Flag variables
         self.done_travelling = False # has robot taken steps to moving object
         self._close_obstacle = False # is robot close to a wall or object
+        self.close_to_robot = False # is robot close to moving object
 
         # information of laser scan/object detection
         self.scan_angle = scan_angle
         self.min_threshold_distance = min_threshold_distance
-        self.close_to_robot = False
         self.energy = 20
+        self.error_history = open("errors_q_6.txt", "a") # for experiments
 
     
     def _obj_callback(self, msg):
@@ -126,7 +127,7 @@ class qMove:
             if (min_range_val < self.min_threshold_distance):
                 self._close_obstacle = True
             else:
-                self.close_to_obstacle = False
+                self._close_obstacle = False
     
     def map_callback(self, msg):
         """Initializes map as Grid object; calls method to get best policy"""
@@ -145,10 +146,10 @@ class qMove:
         """Handles Q-learning; sets q_policy instance variable to best policy found after training"""
         # check to see if map has been read
         if self.map != None:
-            # start the q-learning
+            # start the q-learning process
             q_model = q_learning.QLearning(width=self.width, height=self.height, start_loc=(self.curr_x, self.curr_y), target_loc=self.target_loc)
             q_model.is_close_to_robot = self.close_to_robot
-            q_model.training(50) # training for 50 iterations
+            q_model.training(25) # training for 25 iterations
             q_model.get_best_policy(q_model.q_table)
             self.q_policy = q_model.best_policy # setting the best policy
         
@@ -163,7 +164,7 @@ class qMove:
             self.rate.sleep()
         self.vel_msg.linear.x = 0
         self.vel_msg.angular.z = 0
-        self.publisher.publish(self.vel_msg)
+        self.publisher.publish(self.vel_msg) # stop message
     
     def follow_policy(self):
         """Controls the robot's movements to match actions in best policy"""
@@ -249,24 +250,21 @@ class qMove:
             sign = "negative"
 
         duration = angular_distance/ANG_VELOCITY
-
         if sign == "positive":
             self.move(0, ANG_VELOCITY, rospy.get_rostime(), duration)
         else:
             self.move(0, -ANG_VELOCITY, rospy.get_rostime(), duration)
-        
         self.curr_angle = target_angle # update the current orientation of the robot
-
 
     def is_close(self, curr_loc):
         """checks if distance between current and target loc below threshold"""
         
         distance = math.sqrt((curr_loc[0] - self.target_loc[0])**2 + (curr_loc[1] - self.target_loc[1])**2)
+        self.error_history.write(str(distance) + "\n") # for experiments
 
         if distance < 1.1:
             self.close_to_robot = True
             return True
-        
         return False
 
 if __name__ == "__main__":
