@@ -111,7 +111,7 @@ class QLearning:
         distance_to_object = math.sqrt((self.target[0] - point[0])**2 + (self.target[1] - point[1])**2)
         following_reward = max_reward/(1 + distance_to_object) # reward to encourage following
         
-        low_energy_penalty = -100 * math.sqrt((1 - (float(curr_energy) / 20))) # change to -100 if you want to prioritize object following
+        low_energy_penalty = -100 * math.sqrt((1 - (float(curr_energy) / 20))) # change to -2000 if you want to energy conservation
 
         edge_penalty = 0 # penalty given if robot is too close to edges of environment
         if point[0] >= 9 or point[1] >= 9 or point[0] <= 1 or point[1] <= 1:
