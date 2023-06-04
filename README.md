@@ -18,15 +18,13 @@ and extracting information about relative translation and orientation.
 * q_learning.py: implements q-learning. That is, includes functions to update q-table, calculate rewards,
 start the training process and return the best policy as a result of training.
 * robot_q_movement.py: processes a point published by `finder.py`; moves the robot to that point
-<<<<<<< HEAD
-using Q-learning
-* generate_train_data.py: generates train data for experience replay during DQN training
+
+For DQN:  
+* dqn.py: DQN training and evaluation
 * reset_simulation.py: resets the ROS world simulation
-* dqn.py: DQN network
-=======
-using Q-learning.
-*
->>>>>>> 9de679ff2caebdb2e3766960a938f882ac65efca
+* robot_motion.py: robot node subscribed to by dqn.py
+* package files: CMakeLists.txt, setup.py, package.xml, launch/simulation.launch
+
 
 ## Setup and Execution
 (in addition to tf, get numpy and scikit-learn)
@@ -57,3 +55,9 @@ To run the main robot:
 ```
 python robot_q_movement.py # executing the discrete learning algorithm for following
 ```
+
+To train the dqn: Just run <code>python dqn.py</code> after running <code>roscore</code>. In the script, uncomment and supply parameters for <code>dqn.train_model(path, filename)</code>.
+The trained model will be saved with extension <code>filename.h5</code>, as well as a record of sum of rewards per training episode stored in <code>filename.pkl</code>.
+
+To evaluate the trained dqn: Run <code>python dqn.py</code>. In the script, uncomment and supply parameters for <code>dqn.eval_dqn(filename, n_iters)</code>
+

@@ -1,0 +1,12 @@
+<launch>
+  <arg name="world" default="PA1"/>
+  <arg name="use_sim_time" default="true"/>
+  <param name="use_sim_time" value="$(arg use_sim_time)"/>
+
+  <node pkg="follower_dqn" type="finder.py" name="finder" output="screen"/>
+  <node pkg="follower_dqn" type="robot_motion.py" name="robot_motion" output="screen"/>
+  <node pkg="follower_dqn" type="random_walk.py" name="random_walk" output="screen"/>
+  <node name="stage_ros" pkg="stage_ros" type="stageros" args="$(find follower_dqn)/$(arg world).world">
+        <param name="base_watchdog_timeout" value="0" />
+    </node>
+</launch>
